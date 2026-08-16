@@ -294,10 +294,21 @@ namespace SizeMap.Engine
             for (int i = 0; i < nodes.Count; i++)
             {
                 RadarNode n = nodes[i];
-                // InWindow is the whole distinction. State is already InWindow-masked to Remembered
-                // when blind, so `!InWindow` and `State == Remembered` are the same predicate — the
-                // flag is used because it says what it means.
-                if (n.InWindow) { if (n.State == NodeState.Wall) grooved.Add(n); }
+                // InWindow is the WHOLE distinction, and the extra `State == Wall` test that used to
+                // sit inside it was a hole that swallowed 87% of tracked nodes on real ES tape.
+                //
+                // LiquidityMemory only ever tracks CONFIRMED walls — a plain level is never promoted
+                // — so every node here was a wall at some point. WallTracker demotes State to Live
+                // the instant a promoted wall's current size stops clearing K_mult x baseline, which
+                // is precisely what happens WHILE IT IS BEING EATEN. So the old chain dropped the
+                // groove at the exact moment the object became worth watching: the wall vanished
+                // mid-life and reappeared if it refilled. Neither branch caught it, so it was not
+                // drawn, not counted live, not counted remembered, not counted faint.
+                //
+                // The groove means "this is a tracked object", not "this currently exceeds a
+                // threshold". Its size falling is already said by the heat colour underneath it.
+                // These three buckets are now exhaustive — RasterizerWallBucketTests pins that.
+                if (n.InWindow) grooved.Add(n);
                 else if (n.Confidence >= ConfidenceFloor) remembered.Add(n);
             }
             grooved.Sort(ByPeak);

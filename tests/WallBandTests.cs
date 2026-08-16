@@ -285,14 +285,38 @@ namespace SizeMap.Tests
         }
 
         [Fact]
-        public void A_live_but_unconfirmed_level_is_never_grooved_and_never_remembered()
+        public void A_level_that_was_never_confirmed_never_enters_the_snapshot()
         {
-            // Only confirmed walls are ever tracked as objects. A plain level is heat and nothing
-            // else — the rule that keeps a 40-level chart readable.
-            var live = Wall(400, 400);
-            live.State = NodeState.Live;
-            var px = Render(new List<RadarNode> { live });
-            for (int i = 0; i < px.Length; i++) Assert.Equal(BgI, px[i]);
+            // The rule that keeps a 40-level chart readable is real, but it lives in WallTracker,
+            // not in the renderer: `Update` calls `_memory.Promote` ONLY when `IsConfirmed`, so a
+            // plain level is heat and never becomes a node at all.
+            //
+            // This test used to assert the renderer instead — it built a State == Live node by hand
+            // and demanded nothing be drawn. That state cannot arrive that way, and the assertion
+            // was the 87% hole: WallTracker demotes a real wall to Live the moment its size stops
+            // clearing K_mult x baseline, which is what happens WHILE IT IS BEING EATEN. The
+            // renderer dropped it there, so a wall vanished at exactly the moment it mattered.
+            // Testing the rule where the rule lives is what stops that from coming back.
+            var cfg = new RadarConfig { TickSize = 0.25, K_mult = 4.0, MinAbsSize = 40 };
+            var tracker = new WallTracker(cfg);
+            var book = new BookMirror(0.25, TimeSpan.FromSeconds(30));
+            var t = new DateTime(2026, 8, 16, 14, 30, 0, DateTimeKind.Utc);
+
+            // Ten ordinary levels a side, none of them anywhere near K_mult x median.
+            for (int step = 0; step < 40; step++)
+            {
+                DateTime now = t.AddMilliseconds(step * 100);
+                for (int lv = 0; lv < 10; lv++)
+                {
+                    book.ApplyDepth(new DepthEvent { Side = Side.Bid, Op = DepthOp.Update, Position = lv,
+                        Price = 7800.00 - lv * 0.25, Volume = 60 + lv, Time = now });
+                    book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Update, Position = lv,
+                        Price = 7800.25 + lv * 0.25, Volume = 60 + lv, Time = now });
+                }
+                tracker.Update(book, now);
+            }
+
+            Assert.Empty(tracker.GetSnapshot(t.AddSeconds(4)));
         }
 
         static int At2(int[] px, int w, int x, int y) { return px[y * w + x]; }

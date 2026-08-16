@@ -760,11 +760,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private static void Census(System.Collections.Generic.IReadOnlyList<RadarNode> nodes,
 		                           out int live, out int mem, out int faint)
 		{
+			// EXACTLY the renderer's predicate, and that is not a style point. These two disagreed:
+			// the census counted `InWindow` alone while DrawWalls also demanded `State == Wall`, so
+			// the HUD advertised a population 87% of which never reached a pixel — and a whole
+			// verdict was reasoned about that population. A census must count what is drawn or it is
+			// not a census, it is a second opinion. The buckets are exhaustive by construction.
 			live = mem = faint = 0;
 			if (nodes == null) return;
 			for (int i = 0; i < nodes.Count; i++)
 			{
-				if (nodes[i].InWindow) { if (nodes[i].State == NodeState.Wall) live++; }
+				if (nodes[i].InWindow) live++;
 				else if (nodes[i].Confidence >= 0.25) mem++;
 				else faint++;
 			}
