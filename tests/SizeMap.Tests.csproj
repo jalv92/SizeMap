@@ -12,4 +12,13 @@
   <ItemGroup>
     <ProjectReference Include="..\engine\SizeMap.Engine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The NT8 writer, compiled straight into the test assembly. It touches exactly one
+         NinjaTrader symbol (Globals.UserDataDir), stubbed in RecorderWriterTests.cs, so the
+         file-rollover logic can be tested without the platform. -->
+    <Compile Include="..\nt8\SizeMapRecorder.cs" />
+    <!-- The harness' PNG encoder, same trick: it is `internal` and has no dependencies, so
+         compiling it in is cheaper than referencing an Exe project just to test 60 lines. -->
+    <Compile Include="..\harness\Png.cs" />
+  </ItemGroup>
 </Project>

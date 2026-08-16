@@ -29,11 +29,16 @@ deploy() {   # deploy <src> <dest-dir>
 }
 
 echo "SizeMap -> NinjaTrader 8"
-for f in "$REPO"/nt8/SizeMapProbe.cs "$REPO"/nt8/SizeMapHeat.cs; do
-  [ -f "$f" ] && deploy "$f" "$IND"
-done
-for f in "$REPO"/nt8/SizeMapNullStyle.cs; do
-  [ -f "$f" ] && deploy "$f" "$STY"
+# Route by the NAMESPACE the file declares, not by a hand-kept list of names: the list
+# silently omitted SizeMapRecorder.cs, and a missing sibling is CS0246 for the whole
+# Custom.dll — the same blast radius as a duplicate type, from a typo nobody can see.
+for f in "$REPO"/nt8/*.cs; do
+  [ -f "$f" ] || continue
+  if grep -q '^namespace NinjaTrader\.NinjaScript\.ChartStyles' "$f"; then
+    deploy "$f" "$STY"
+  else
+    deploy "$f" "$IND"
+  fi
 done
 if [ -d "$REPO/engine" ]; then
   for f in "$REPO"/engine/*.cs; do [ -f "$f" ] && deploy "$f" "$IND"; done
