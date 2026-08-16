@@ -15,6 +15,9 @@ namespace SizeMap.Engine
         public double F_flicker = 6.0;          // max Add/Remove osc per second before reject
 
         // Episode / classification
+        // Stays 1. Measured at 2 and 3 on three ES tapes (`verdict --dapproach`): zero new PULLED,
+        // and refusals 37.7/33.4/46.0% -> 56.5/53.5/64.0% at 2. Arming earlier does not reveal more
+        // wall deaths, it only opens episodes that time out before one happens.
         public int D_approach = 1;              // ticks to open an episode
         public TimeSpan T_episode = TimeSpan.FromMilliseconds(3000);
         // W_assoc: trade attribution window. Currently reserved — TradedAt sums over the full

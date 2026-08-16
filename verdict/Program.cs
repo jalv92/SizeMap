@@ -35,11 +35,13 @@ namespace SizeMap.Verdict
   dotnet run --project verdict -- --in <tape.smr> [options]
 
   --in <file.smr>     recorded tape (required)
-  --hz <n>            engine ticks per second        (default 20 = EngineIntervalMs 50)
-  --retention <sec>   BookMirror trade retention     (default 30, the indicator's value)
+  --hz <n>            engine ticks per second        (default 4 — SizeMapHeat's real rate)
+  --retention <sec>   BookMirror trade retention     (default 1500, the shipped value)
   --retention2 <sec>  second full pass at this retention, to measure the TBF bias (default off)
-  --k <mult>          RadarConfig.K_mult override    (default 4.0)
+  --k <mult>          RadarConfig.K_mult override    (default 1.5, the ES property default)
   --minabs <lots>     RadarConfig.MinAbsSize         (default 40)
+  --dapproach <n>     RadarConfig.D_approach         (default 1; 2-3 = Phase 3 mechanism B)
+  --csv <file>        one line per resolved episode, for audits the report does not do
   --tick <size>       tick size override             (default: from the file header)
   --minutes <n>       stop after n minutes of market time
   --label <name>      suffix for the report filename (one tape, several configs)
@@ -63,6 +65,8 @@ namespace SizeMap.Verdict
             Result main = new Replay(o, o.Retention).Run();
             Result raised = o.Retention2 > 0 ? new Replay(o, o.Retention2).Run() : null;
 
+            if (o.Csv != null) Dump(main, o.Csv);
+
             string text = Report.Build(main, raised);
             Console.Write(text);
 
@@ -82,6 +86,34 @@ namespace SizeMap.Verdict
             }
             return 0;
         }
+
+        // One line per resolved episode. The report aggregates; this is what lets two RUNS be diffed
+        // episode by episode — the only way to say "this mechanism moved exactly these labels and no
+        // others", which is how Phase 3 concluded that reordering Pulled above Consumed moves none.
+        static void Dump(Result r, string path)
+        {
+            StringBuilder b = new StringBuilder();
+            b.AppendLine("side,price,opened,resolved,sizeAtOpen,displayed,traded,cancelled,drop,"
+                         + "vanished,crossed,awayAtVanish,cls,null,sameTick,wallAgeSec,peak,tbf,mid0,m10,m30,m60");
+            for (int i = 0; i < r.Episodes.Count; i++)
+            {
+                EpisodeRec e = r.Episodes[i];
+                b.Append(e.Side).Append(',').Append(Inv(e.Price)).Append(',')
+                 .Append(e.OpenedAt.Ticks).Append(',').Append(e.ResolvedAt.Ticks).Append(',')
+                 .Append(e.SizeAtOpen).Append(',').Append(e.Displayed).Append(',').Append(e.Traded).Append(',')
+                 .Append(e.Cancelled).Append(',').Append(e.Drop).Append(',').Append(e.Vanished ? 1 : 0).Append(',')
+                 .Append(e.Crossed ? 1 : 0).Append(',').Append(e.TicksAwayAtVanish).Append(',')
+                 .Append(e.Cls).Append(',').Append(e.Null).Append(',').Append(e.SameTick ? 1 : 0).Append(',')
+                 .Append(e.WallAgeSec.ToString("F3", CultureInfo.InvariantCulture)).Append(',')
+                 .Append(e.Peak).Append(',').Append(e.Tbf.ToString("F4", CultureInfo.InvariantCulture)).Append(',')
+                 .Append(Inv(e.MidAtResolve)).Append(',').Append(Inv(e.Have[0] ? e.Mid[0] : 0)).Append(',')
+                 .Append(Inv(e.Have[1] ? e.Mid[1] : 0)).Append(',').Append(Inv(e.Have[2] ? e.Mid[2] : 0)).AppendLine();
+            }
+            File.WriteAllText(path, b.ToString());
+            Console.Error.WriteLine("wrote " + path + " (" + r.Episodes.Count + " episodes)");
+        }
+
+        static string Inv(double d) { return d.ToString(CultureInfo.InvariantCulture); }
 
         // The runnable check. Every branch below is one that would silently corrupt a headline
         // number if it broke, and none of them is covered by the engine's own 130 tests.
@@ -110,9 +142,43 @@ namespace SizeMap.Verdict
             // Normal tail, against a table value.
             Chk(Math.Abs(Stats.TwoSidedZ(1.959964) - 0.05) < 1e-4, "z=1.96 -> p=0.05");
 
+            // Holm, by hand. m=3: adjusted are 3p1, then max(3p1, 2p2), then max(., 1p3), monotone.
+            double[] h3 = Stats.Holm(new double[] { 0.01, 0.04, 0.03 });
+            Chk(Math.Abs(h3[0] - 0.03) < 1e-12, "holm smallest p x m");
+            Chk(Math.Abs(h3[2] - 0.06) < 1e-12, "holm middle p x (m-1)");
+            Chk(Math.Abs(h3[1] - 0.06) < 1e-12, "holm is monotone: the largest inherits the running max");
+            Chk(Stats.Holm(new double[] { 0.9, 0.9 })[0] == 1.0, "holm caps at 1");
+            Chk(Stats.Holm(new double[0]).Length == 0, "holm survives an empty family");
+
+            // MDE of a difference of means: 2.8 x SE. Two unit-variance samples of 100 -> 2.8*sqrt(0.02).
+            List<double> u1 = new List<double>(), u2 = new List<double>();
+            for (int i = 0; i < 100; i++) { u1.Add(i % 2 == 0 ? 1 : -1); u2.Add(i % 2 == 0 ? 1 : -1); }
+            Chk(Math.Abs(Stats.MdeMean(u1, u2) - 2.8 * Math.Sqrt(2.0 / 100 * (100.0 / 99))) < 1e-9, "MDE of a mean difference");
+
+            // Cluster bootstrap: with EVERY episode on its own wall and a real separation, it must
+            // find one; with all of them on ONE wall there are no clusters to resample and it must
+            // refuse rather than invent a bound.
+            List<string> ca = new List<string>(), cb = new List<string>();
+            List<double> xa = new List<double>(), xb = new List<double>();
+            for (int i = 0; i < 60; i++) { ca.Add("w" + i); xa.Add(10 + i % 3); cb.Add("v" + i); xb.Add(i % 3); }
+            double lo, hi, pc; int nc;
+            Stats.ClusterBoot(ca, xa, cb, xb, out lo, out hi, out pc, out nc);
+            Chk(nc == 120 && lo > 0 && pc < 0.01, "cluster bootstrap separates well-separated clusters");
+            Stats.ClusterBoot(new List<string> { "w", "w" }, new List<double> { 1, 2 },
+                              new List<string> { "w", "w" }, new List<double> { 3, 4 }, out lo, out hi, out pc, out nc);
+            Chk(nc == 1 && double.IsNaN(pc), "one cluster is not a sample: no p, no CI");
+
             // Key packing must never collide across sides or across neighbouring ticks.
             Chk(Replay.KeyOf(Side.Bid, 6000.25, 0.25) != Replay.KeyOf(Side.Ask, 6000.25, 0.25), "sides differ");
             Chk(Replay.KeyOf(Side.Bid, 6000.25, 0.25) != Replay.KeyOf(Side.Bid, 6000.50, 0.25), "ticks differ");
+
+            // The .md is written BEFORE the .json, so a serializer throw leaves a report on disk with
+            // no machine-readable twin and an exit code nobody reads in a background sweep. An empty
+            // run is the cheapest way to drive every statistic to NaN at once.
+            Result empty = new Result { File = "none", TickSize = 0.25 };
+            string js = Report.Json(empty, null);
+            Chk(js.Contains("\"lifetime_p50_sec\": null"), "an uncomputable statistic serialises as null, not NaN");
+            Chk(Report.Build(empty, null).Length > 0, "the report builds on a tape with no episodes");
 
             Console.WriteLine("self-test OK");
             return 0;
@@ -127,9 +193,16 @@ namespace SizeMap.Verdict
     internal sealed class Opt
     {
         public string In, Label, OutDir = Path.Combine("docs", "verdict");
-        public double Hz = 20, Retention = 30, Retention2 = 0, K = 4.0, Tick = 0;
+        // The SHIPPED configuration, not the tool's old convenience defaults. SizeMapHeat gates
+        // WallTracker.Update to EngineIntervalMs = 250 (4 Hz), and WallDetector's temporal baseline
+        // is a median over the SAMPLES that gate produces — so the call rate is not a performance
+        // knob, it is an input to the detector. Phase 2 measured at 20 Hz and reported it as the
+        // indicator's behaviour. K/MinAbs/Retention are the indicator's ES property defaults.
+        public double Hz = 4, Retention = 1500, Retention2 = 0, K = 1.5, Tick = 0;
         public long MinAbs = 40;
         public double Minutes = 0;
+        public int DApproach = 1;
+        public string Csv;
         public bool NoWrite, Progress;
 
         public static Opt Parse(string[] a)
@@ -152,6 +225,8 @@ namespace SizeMap.Verdict
                     case "--retention2": o.Retention2 = Dbl(v, k); break;
                     case "--k": o.K = Dbl(v, k); break;
                     case "--minabs": o.MinAbs = (long)Dbl(v, k); break;
+                    case "--dapproach": o.DApproach = (int)Dbl(v, k); break;
+                    case "--csv": o.Csv = v; break;
                     case "--tick": o.Tick = Dbl(v, k); break;
                     case "--minutes": o.Minutes = Dbl(v, k); break;
                     default: throw new ArgumentException("unknown option " + k);
@@ -188,8 +263,42 @@ namespace SizeMap.Verdict
         public double[] Mid = new double[3];
         public bool[] Have = new bool[3];
         public double WallAgeSec;    // promotion -> resolution
+        // Cluster id: price/side PLUS the promotion stamp, so a wall that dies and is re-promoted at
+        // the same price is a different cluster. Several episodes can sit on ONE wall, which is the
+        // dependence that makes an i.i.d. p-value optimistic.
+        public string Wall;
         public long Peak;
         public double Tbf;           // ConsumptionTracker.TradeBackedFraction at resolution
+    }
+
+    // One contrast: bucket A's mean forward move against bucket B's, on ONE side at ONE horizon.
+    internal sealed class MoveTest
+    {
+        public string Pair;
+        public int Side, H, N1, N2, Clusters;
+        public double M1, M2, Diff, Mde, T, P, HolmP, CiLo, CiHi, PCluster;
+
+        // null when either bucket has fewer than 2 reads: a t on n<2 is not a weak test, it is
+        // undefined, and a NaN row in a Holm family silently shrinks the correction.
+        public static MoveTest Build(List<EpisodeRec> eps, int c1, int c2, int side, int h)
+        {
+            List<string> wa, wb;
+            List<double> a = Report.Moves(Report.Bucket(eps, c1, side), h, out wa);
+            List<double> b = Report.Moves(Report.Bucket(eps, c2, side), h, out wb);
+            if (a.Count < 2 || b.Count < 2) return null;
+
+            MoveTest t = new MoveTest
+            {
+                Pair = Report.NameOf(c1) + " vs " + Report.NameOf(c2), Side = side, H = h,
+                N1 = a.Count, N2 = b.Count, M1 = Stats.Mean(a), M2 = Stats.Mean(b)
+            };
+            t.Diff = t.M1 - t.M2;
+            Stats.Test w = Stats.Welch(a, b);
+            t.T = w.T; t.P = w.P;
+            t.Mde = Stats.MdeMean(a, b);
+            Stats.ClusterBoot(wa, a, wb, b, out t.CiLo, out t.CiHi, out t.PCluster, out t.Clusters);
+            return t;
+        }
     }
 
     internal sealed class NodeTrack
@@ -213,10 +322,15 @@ namespace SizeMap.Verdict
         public List<EpisodeRec> Episodes = new List<EpisodeRec>();
         public int FidelityOk, FidelityBad, SameTick, NoNode;
 
-        public List<double> Live = new List<double>();      // per census sample, all tracked nodes
-        public List<double> Remembered = new List<double>();
-        public List<double> LiveBand = new List<double>();  // clipped to the spec's +/-25 tick screen band
-        public List<double> RememberedBand = new List<double>();
+        // The RENDERER's three buckets, per census sample. Phase 2 counted `InWindow ? live : rem`
+        // with no confidence test, so it reasoned about a population the chart never showed. These
+        // three mirror Rasterizer.DrawWalls exactly and are exhaustive by construction.
+        public List<double> Solid = new List<double>();      // InWindow            -> grooved band
+        public List<double> Hollow = new List<double>();     // else Conf >= 0.25   -> hollow rule
+        public List<double> Undrawn = new List<double>();    // tracked, under the floor: INVISIBLE
+        public List<double> SolidBand = new List<double>();  // the drawn two, clipped to +/-25 ticks
+        public List<double> HollowBand = new List<double>();
+        public int CapHitSolid, CapHitHollow;                // samples where the §4 draw caps bit
         public int Dead;                                     // nodes that left memory (evicted)
         public int WallsDetected;
         public List<double> Lifetimes = new List<double>();
@@ -233,6 +347,12 @@ namespace SizeMap.Verdict
         // to the +/-25 ticks the target band 2-6 live / 10-25 remembered was written against.
         const int ScreenBandTicks = 25;
         const double CensusHz = 4;          // NT8 repaints at 4 fps; a census the eye never sees is fiction
+
+        // Copied from Rasterizer.DrawWalls, deliberately by value and not by reference: `engine/` is
+        // netstandard2.0 and these are private consts there. If either moves, this tool starts
+        // counting a different population than the chart draws — which is the exact Phase 2 bug.
+        const double ConfidenceFloor = 0.25;
+        const int MaxGrooved = 12, MaxRemembered = 24;
 
         sealed class Shadow
         {
@@ -271,6 +391,7 @@ namespace SizeMap.Verdict
             _cfg.TickSize = _tick;
             _cfg.K_mult = o.K;
             _cfg.MinAbsSize = o.MinAbs;
+            _cfg.D_approach = o.DApproach;
             _r.File = o.In; _r.TickSize = _tick; _r.RetentionSec = retentionSec;
             _r.Hz = o.Hz; _r.K = o.K; _r.MinAbs = o.MinAbs; _r.T0 = new DateTime(h.T0Ticks);
 
@@ -490,12 +611,14 @@ namespace SizeMap.Verdict
             {
                 e.Peak = t.Peak;
                 armTime = new DateTime(t.FirstSeenTicks);   // LiquidityMemory's own promotion stamp
+                e.Wall = k + ":" + t.FirstSeenTicks;
             }
             else
             {
                 // Promoted and resolved between two 4 Hz census samples: no node was ever observed.
                 e.Peak = s.SizeAtOpen;
                 armTime = s.OpenedAt;
+                e.Wall = k + ":@" + s.OpenedAt.Ticks;   // never observed as a node: its own cluster
                 _r.NoNode++;
             }
             e.WallAgeSec = (now - armTime).TotalSeconds;
@@ -532,7 +655,7 @@ namespace SizeMap.Verdict
         {
             IReadOnlyList<RadarNode> snap = _tracker.GetSnapshot(now);
             double mid = Mid();
-            int live = 0, rem = 0, liveBand = 0, remBand = 0;
+            int solid = 0, hollow = 0, undrawn = 0, solidBand = 0, hollowBand = 0;
             HashSet<long> seen = new HashSet<long>();
 
             for (int i = 0; i < snap.Count; i++)
@@ -541,8 +664,11 @@ namespace SizeMap.Verdict
                 long k = Key(n.Side, n.Price);
                 seen.Add(k);
                 bool band = mid <= 0 || Math.Abs(n.Price - mid) <= ScreenBandTicks * _tick + _tick / 2;
-                if (n.InWindow) { live++; if (band) liveBand++; }
-                else { rem++; if (band) remBand++; }
+                // THE renderer's predicate, in the renderer's order. Nothing else may decide who is
+                // counted: a verdict about walls the chart does not draw is a verdict about nothing.
+                if (n.InWindow) { solid++; if (band) solidBand++; }
+                else if (n.Confidence >= ConfidenceFloor) { hollow++; if (band) hollowBand++; }
+                else undrawn++;
 
                 NodeTrack t;
                 if (!_track.TryGetValue(k, out t) || t.FirstSeenTicks != n.FirstSeenTicks)
@@ -567,8 +693,10 @@ namespace SizeMap.Verdict
             }
 
             if (mid > 0) { _r.MidSeries.Add(mid); _r.MidTicks.Add(now.Ticks); }
-            _r.Live.Add(live); _r.Remembered.Add(rem);
-            _r.LiveBand.Add(liveBand); _r.RememberedBand.Add(remBand);
+            _r.Solid.Add(solid); _r.Hollow.Add(hollow); _r.Undrawn.Add(undrawn);
+            _r.SolidBand.Add(solidBand); _r.HollowBand.Add(hollowBand);
+            if (solid > MaxGrooved) _r.CapHitSolid++;
+            if (hollow > MaxRemembered) _r.CapHitHollow++;
             _r.CensusSamples++;
 
             // Resting-size context, so "is MinAbsSize sane for this instrument" is answerable
@@ -676,6 +804,94 @@ namespace SizeMap.Verdict
             return 2.8 * Math.Sqrt(p * (1 - p) * (1.0 / n1 + 1.0 / n2));
         }
 
+        // The same 80%-power floor for a difference of MEANS: (z_.975 + z_.80) x SE(diff) = 2.8 x SE.
+        // Phase 2 printed `p 0.2422` for a test that could not have seen 3.13 ES ticks and said
+        // nothing about it, which reads as "no effect" and is not the same claim.
+        public static double MdeMean(List<double> a, List<double> b)
+        {
+            if (a == null || b == null || a.Count < 2 || b.Count < 2) return double.NaN;
+            double va = Var(a, Mean(a)) / a.Count, vb = Var(b, Mean(b)) / b.Count;
+            return 2.8 * Math.Sqrt(va + vb);
+        }
+
+        // Holm-Bonferroni step-down over a whole family. Chosen over plain Bonferroni (uniformly
+        // more powerful, same guarantee) and over Benjamini-Hochberg (which controls only the false
+        // DISCOVERY rate and whose original proof wants independence these tests do not have).
+        // Returns the ADJUSTED p, so every row is still read against the familiar 0.05.
+        public static double[] Holm(double[] p)
+        {
+            int m = p.Length;
+            double[] adj = new double[m];
+            if (m == 0) return adj;
+            int[] ix = new int[m];
+            for (int i = 0; i < m; i++) ix[i] = i;
+            Array.Sort(ix, delegate (int x, int y) { return p[x].CompareTo(p[y]); });
+            double run = 0;
+            for (int i = 0; i < m; i++)
+            {
+                double a = (m - i) * p[ix[i]];
+                if (a > run) run = a;              // monotone: an adjusted p may never fall
+                adj[ix[i]] = run > 1 ? 1 : run;
+            }
+            return adj;
+        }
+
+        // Cluster bootstrap of the difference of means, resampling WALLS (not episodes) with
+        // replacement. Episodes are not independent — a wall that is approached, eaten back and
+        // approached again produces several of them — and the Welch t above counts every one as
+        // fresh evidence. Resampling the cluster keeps whatever within-wall correlation exists.
+        //
+        // ponytail: 2 000 replicates, fixed seed, no BCa correction. Ceiling — the percentile CI is
+        // slightly off for very skewed statistics. Upgrade path — BCa, if a decision ever turns on
+        // the third decimal of a bound.
+        public static void ClusterBoot(List<string> ca, List<double> va, List<string> cb, List<double> vb,
+                                       out double lo, out double hi, out double p, out int clusters)
+        {
+            lo = hi = p = double.NaN; clusters = 0;
+            Dictionary<string, int> ix = new Dictionary<string, int>();
+            List<List<double>> ga = new List<List<double>>(), gb = new List<List<double>>();
+            for (int i = 0; i < ca.Count; i++) Put(ix, ga, gb, ca[i], va[i], true);
+            for (int i = 0; i < cb.Count; i++) Put(ix, ga, gb, cb[i], vb[i], false);
+            clusters = ix.Count;
+            if (clusters < 2) return;
+
+            const int B = 2000;
+            Random rnd = new Random(20260816);
+            List<double> diff = new List<double>(B);
+            for (int r = 0; r < B; r++)
+            {
+                double sa = 0, sb = 0; int na = 0, nb = 0;
+                for (int k = 0; k < clusters; k++)
+                {
+                    int j = rnd.Next(clusters);
+                    List<double> la = ga[j], lb = gb[j];
+                    for (int e = 0; e < la.Count; e++) { sa += la[e]; na++; }
+                    for (int e = 0; e < lb.Count; e++) { sb += lb[e]; nb++; }
+                }
+                if (na == 0 || nb == 0) continue;   // a draw that took no cluster from one bucket
+                diff.Add(sa / na - sb / nb);
+            }
+            if (diff.Count < 100) return;           // too few usable replicates to quote a bound
+            lo = Pct(diff, 0.025); hi = Pct(diff, 0.975);
+            int le = 0, ge = 0;
+            for (int i = 0; i < diff.Count; i++) { if (diff[i] <= 0) le++; if (diff[i] >= 0) ge++; }
+            double q = 2.0 * (le < ge ? le : ge) / diff.Count;
+            p = q > 1 ? 1 : q;
+        }
+
+        static void Put(Dictionary<string, int> ix, List<List<double>> ga, List<List<double>> gb,
+                        string cluster, double v, bool isA)
+        {
+            if (cluster == null) cluster = "?";
+            int j;
+            if (!ix.TryGetValue(cluster, out j))
+            {
+                j = ix.Count; ix[cluster] = j;
+                ga.Add(new List<double>()); gb.Add(new List<double>());
+            }
+            (isA ? ga[j] : gb[j]).Add(v);
+        }
+
         public static double TwoSidedZ(double z) { return 2 * (1 - Phi(z)); }
 
         static double Phi(double x) { return 0.5 * (1 + Erf(x / Math.Sqrt(2))); }
@@ -746,19 +962,21 @@ namespace SizeMap.Verdict
             Row(s, "wall peak size", Q(r.Peaks, " lots"));
             Row(s, "episodes", eps.Count + " resolved" + (r.SameTick > 0 ? " (+" + r.SameTick + " opened and died inside one engine tick, excluded)" : ""));
             s.AppendLine();
-            s.AppendLine("**Census** — sampled " + r.CensusSamples.ToString("N0") + " times at 4 Hz. `L` = in the depth window,");
-            s.AppendLine("`R` = remembered (tracked, outside it). Target band from visual-spec §5: **2-6 live, 10-25 remembered**.");
+            s.AppendLine("**Census** — sampled " + r.CensusSamples.ToString("N0") + " times at 4 Hz, through the RENDERER's own predicate:");
+            s.AppendLine("`InWindow` -> **solid** groove; else `Confidence >= 0.25` -> **hollow** rule; else **undrawn**. The third bucket is");
+            s.AppendLine("the one Phase 2 had no name for: tracked, counted as \"remembered\", and never on the chart. Target band from");
+            s.AppendLine("visual-spec §5: **2-6 solid, 10-25 hollow**.");
             s.AppendLine();
             s.AppendLine("| census | mean | p50 | p90 | max | in target band |");
             s.AppendLine("|---|---|---|---|---|---|");
-            s.AppendLine("| L, all tracked | " + F(Stats.Mean(r.Live), 2) + " | " + F(Stats.Median(r.Live), 0) + " | "
-                         + F(Stats.Pct(r.Live, 0.9), 0) + " | " + F(Stats.Pct(r.Live, 1), 0) + " | " + Band(r.Live, 2, 6) + " |");
-            s.AppendLine("| R, all tracked | " + F(Stats.Mean(r.Remembered), 2) + " | " + F(Stats.Median(r.Remembered), 0) + " | "
-                         + F(Stats.Pct(r.Remembered, 0.9), 0) + " | " + F(Stats.Pct(r.Remembered, 1), 0) + " | " + Band(r.Remembered, 10, 25) + " |");
-            s.AppendLine("| L, ±25 ticks of mid | " + F(Stats.Mean(r.LiveBand), 2) + " | " + F(Stats.Median(r.LiveBand), 0) + " | "
-                         + F(Stats.Pct(r.LiveBand, 0.9), 0) + " | " + F(Stats.Pct(r.LiveBand, 1), 0) + " | " + Band(r.LiveBand, 2, 6) + " |");
-            s.AppendLine("| R, ±25 ticks of mid | " + F(Stats.Mean(r.RememberedBand), 2) + " | " + F(Stats.Median(r.RememberedBand), 0) + " | "
-                         + F(Stats.Pct(r.RememberedBand, 0.9), 0) + " | " + F(Stats.Pct(r.RememberedBand, 1), 0) + " | " + Band(r.RememberedBand, 10, 25) + " |");
+            CensusRow(s, "SOLID (drawn, in window)", r.Solid, 2, 6);
+            CensusRow(s, "HOLLOW (drawn, remembered)", r.Hollow, 10, 25);
+            CensusRow(s, "UNDRAWN (tracked, invisible)", r.Undrawn, -1, -1);
+            CensusRow(s, "SOLID, ±25 ticks of mid", r.SolidBand, 2, 6);
+            CensusRow(s, "HOLLOW, ±25 ticks of mid", r.HollowBand, 10, 25);
+            s.AppendLine();
+            s.AppendLine("Draw caps (§4: 12 solid, 24 hollow) bit in " + Pc(r.CapHitSolid, r.CensusSamples) + " / "
+                         + Pc(r.CapHitHollow, r.CensusSamples) + " of samples.");
             s.AppendLine();
 
             int[] c = new int[4];
@@ -887,88 +1105,143 @@ namespace SizeMap.Verdict
         }
 
         // ---------------------------------------------------------------- Q3: forward information
+        //
+        // Three corrections over Phase 2, each of which changes what may be concluded:
+        //   per SIDE (a pooled bucket has two opposite drift baselines and therefore none),
+        //   no P(through) (CONSUMED is DEFINED as crossed, so that comparison is a tautology), and
+        //   Holm over the whole declared grid (Phase 2 ran ~81 tests with no correction).
+        // Plus a cluster bootstrap by wall, because several episodes sit on one wall and an i.i.d.
+        // p-value counts each of them as fresh evidence.
+        static readonly string[] HN = { "+10s", "+30s", "+60s" };
+
+        // The pre-declared contrast grid. Fixed here, in code, so it cannot grow after the numbers
+        // are seen. CONSUMED against each other label answers "is the glyph worth painting"; the
+        // fourth answers "is ABSORBED different from painting nothing".
+        static readonly int[,] Pairs = { { 2, 3 }, { 2, 0 }, { 2, 1 }, { 0, 3 } };
+
         static void Q3(StringBuilder s, Result r, List<EpisodeRec> eps)
         {
             H2(s, "3. Does the label carry forward information?");
             s.AppendLine();
             s.AppendLine("For every resolved episode: the mid at resolution, and the mid at +10 s / +30 s / +60 s of MARKET time.");
-            s.AppendLine("`through` = the mid is on the far side of the wall price (above an ask wall, below a bid wall).");
             s.AppendLine("`move` = signed ticks in the wall's through-direction, so positive always means *the wall gave way*.");
             s.AppendLine();
+            s.AppendLine("1. **Per side, never pooled.** An ask wall giving way is price UP; a bid wall's is price DOWN. A pooled");
+            s.AppendLine("   bucket is a blend of two opposite baselines, so the report's own instruction to read every move");
+            s.AppendLine("   against the drift row cannot be followed for it. Phase 2's one significant result was ~31% bid/ask mix.");
+            s.AppendLine("2. **`P(through)` is gone, at every horizon.** CONSUMED is *defined* as \"the inside quote crossed the");
+            s.AppendLine("   level\", so it starts already through and every other bucket starts at 0%. Its huge z-scores measured");
+            s.AppendLine("   that definition, not the future. `move` is a CHANGE from the mid at resolution and is the only");
+            s.AppendLine("   column here that can carry forward information.");
+            s.AppendLine("3. **Every mean-move test prints its 80%-power MDE.** A flat p from a test blind to a 3-tick effect is");
+            s.AppendLine("   not evidence of no effect, and Phase 2 printed one such p with no marker.");
+            s.AppendLine();
 
-            string[] hn = { "+10s", "+30s", "+60s" };
-            for (int side = -1; side < 2; side++)
+            double[] d = { Drift(r, 10), Drift(r, 30), Drift(r, 60) };
+            s.AppendLine("**Drift control.** The same measurement with no episode in it: the mean forward move of the mid from");
+            s.AppendLine("every one of the " + r.MidSeries.Count.ToString("N0") + " census samples on this tape, in the ASK-wall sign convention (price up = +).");
+            s.AppendLine("An ask wall's move IS this number when the label carries nothing; a bid wall's is its negative. The");
+            s.AppendLine("windows overlap, so this row's own effective n is far below the sample count — it sets the CENTRE that");
+            s.AppendLine("`excess` is measured from, and no test below depends on its precision (a same-side contrast cancels it).");
+            s.AppendLine();
+            s.AppendLine("| | +10s | +30s | +60s |");
+            s.AppendLine("|---|---|---|---|");
+            s.AppendLine("| unconditional mean move, ticks | " + F(d[0], 2) + " | " + F(d[1], 2) + " | " + F(d[2], 2) + " |");
+            s.AppendLine();
+
+            for (int side = 1; side >= 0; side--)
             {
-                string title = side < 0 ? "Both sides" : (side == 0 ? "Bid walls (support)" : "Ask walls (resistance)");
-                s.AppendLine("**" + title + "**");
+                double sign = side == 1 ? 1 : -1;
+                s.AppendLine("**" + (side == 1 ? "Ask walls (resistance)" : "Bid walls (support)") + "** — `excess` = mean move minus this side's drift null ("
+                             + F(sign * d[0], 2) + " / " + F(sign * d[1], 2) + " / " + F(sign * d[2], 2) + " ticks).");
                 s.AppendLine();
-                s.AppendLine("| outcome | n | through at t0 | " + string.Join(" | ", Wrap(hn, "P(through) ")) + " | "
-                             + string.Join(" | ", Wrap(hn, "mean move ")) + " | " + string.Join(" | ", Wrap(hn, "median ")) + " |");
-                s.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|");
+                s.AppendLine("| outcome | n | walls | ep/wall | mean +10s | excess | mean +30s | excess | mean +60s | excess |");
+                s.AppendLine("|---|---|---|---|---|---|---|---|---|---|");
                 for (int cls = 0; cls < 4; cls++)
                 {
                     List<EpisodeRec> b = Bucket(eps, cls, side);
-                    if (b.Count == 0) { s.AppendLine("| " + Names[cls] + " | 0 | - | - | - | - | - | - | - | - | - | - |"); continue; }
+                    if (b.Count == 0) { s.AppendLine("| " + Names[cls] + " | 0 | - | - | - | - | - | - | - | - |"); continue; }
+                    int cl = ClusterCount(b);
                     StringBuilder line = new StringBuilder();
-                    line.Append("| " + Names[cls] + " | " + b.Count + " | " + Pc(CountThrough(b, -1), b.Count) + " | ");
-                    for (int h = 0; h < 3; h++) { List<EpisodeRec> w = With(b, h); line.Append(w.Count > 0 ? Pc(CountThrough(w, h), w.Count) + " (n" + w.Count + ")" : "-"); line.Append(" | "); }
-                    for (int h = 0; h < 3; h++) { List<double> mv = Moves(b, h); line.Append(mv.Count > 0 ? F(Stats.Mean(mv), 2) : "-"); line.Append(" | "); }
-                    for (int h = 0; h < 3; h++) { List<double> mv = Moves(b, h); line.Append(mv.Count > 0 ? F(Stats.Median(mv), 2) : "-"); line.Append(h < 2 ? " | " : " |"); }
+                    line.Append("| " + Names[cls] + " | " + b.Count + " | " + cl + " | " + F((double)b.Count / Math.Max(1, cl), 1));
+                    for (int h = 0; h < 3; h++)
+                    {
+                        List<double> mv = Moves(b, h);
+                        if (mv.Count == 0) { line.Append(" | - | -"); continue; }
+                        line.Append(" | " + F(Stats.Mean(mv), 2) + " (n" + mv.Count + ")");
+                        line.Append(" | " + F(Stats.Mean(mv) - sign * d[h], 2));
+                    }
+                    line.Append(" |");
                     s.AppendLine(line.ToString());
                 }
                 s.AppendLine();
             }
 
-            s.AppendLine("**Drift control — read every `move` above against this row.** The same measurement with no episode in it:");
-            s.AppendLine("the mean forward move of the mid from every one of the " + r.MidSeries.Count.ToString("N0") + " census samples on this tape.");
-            s.AppendLine("An ask wall's move IS this number when the label carries nothing; a bid wall's is its negative.");
-            s.AppendLine();
-            s.AppendLine("| | +10s | +30s | +60s |");
-            s.AppendLine("|---|---|---|---|");
-            s.AppendLine("| unconditional mean move, ticks (price up = +) | " + F(Drift(r, 10), 2) + " | "
-                         + F(Drift(r, 30), 2) + " | " + F(Drift(r, 60), 2) + " |");
-            s.AppendLine();
+            // ---- the tests
+            int declared = 0;
+            List<MoveTest> tests = new List<MoveTest>();
+            for (int p = 0; p < Pairs.GetLength(0); p++)
+                for (int side = 1; side >= 0; side--)
+                    for (int h = 0; h < 3; h++)
+                    {
+                        declared++;
+                        MoveTest t = MoveTest.Build(eps, Pairs[p, 0], Pairs[p, 1], side, h);
+                        if (t != null) tests.Add(t);
+                    }
 
-            s.AppendLine("**Significance** — CONSUMED against each of the others, at all three horizons. `move` is Welch t with a");
-            s.AppendLine("normal-tail p; `P(through)` is a two-proportion z, with the smallest difference these n could detect at 80% power.");
+            double[] raw = new double[tests.Count];
+            for (int i = 0; i < tests.Count; i++) raw[i] = tests[i].P;
+            double[] adj = Stats.Holm(raw);
+            for (int i = 0; i < tests.Count; i++) tests[i].HolmP = adj[i];
+
+            s.AppendLine("**Significance, corrected.** The grid is pre-declared in code (4 contrasts x 2 sides x 3 horizons = "
+                         + declared + " tests);");
+            s.AppendLine("**" + tests.Count + "** have >= 2 episodes with a read on both sides and are testable. Correction is **Holm-Bonferroni**");
+            s.AppendLine("over those " + tests.Count + " — step-down, exact family-wise error control, no independence assumption. The smallest raw p");
+            s.AppendLine("must clear **" + F(tests.Count > 0 ? 0.05 / tests.Count : double.NaN, 5) + "**, the next 0.05/" + Math.Max(1, tests.Count - 1)
+                         + ", and so on; `holm p` is that comparison folded back onto the usual 0.05.");
             s.AppendLine();
-            s.AppendLine("| comparison | horizon | n / n | mean move | t | p | P(through) | z | p | 80%-power MDE |");
-            s.AppendLine("|---|---|---|---|---|---|---|---|---|---|");
-            for (int cls = 0; cls < 4; cls++)
+            s.AppendLine("`MDE` is the smallest true difference these two n could detect at 80% power, alpha 0.05. A row whose");
+            s.AppendLine("|diff| sits far under its MDE has not found nothing — it has not looked. `cluster` columns resample WALLS");
+            s.AppendLine("with replacement (2 000 replicates, fixed seed): several episodes sit on one wall, so an i.i.d. p-value");
+            s.AppendLine("counts each of them as fresh evidence and is optimistic. The cluster CI is the honest one.");
+            s.AppendLine();
+            s.AppendLine("| contrast | side | h | n / n | means | diff | MDE | t | raw p | holm p | walls | cluster 95% CI | cluster p |");
+            s.AppendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+            int survivors = 0, clusterSurvivors = 0;
+            for (int i = 0; i < tests.Count; i++)
             {
-                if (cls == 2) continue;
-                for (int h = 0; h < 3; h++)
-                {
-                    List<EpisodeRec> a = Bucket(eps, 2, -1), b = Bucket(eps, cls, -1);
-                    List<EpisodeRec> aw = With(a, h), bw = With(b, h);
-                    List<double> am = Moves(a, h), bm = Moves(b, h);
-                    Stats.Test t = Stats.Welch(am, bm);
-                    int ak = CountThrough(aw, h), bk = CountThrough(bw, h);
-                    Stats.Test z = Stats.TwoProportion(ak, aw.Count, bk, bw.Count);
-                    double pooled = (aw.Count + bw.Count) > 0 ? (double)(ak + bk) / (aw.Count + bw.Count) : 0;
-                    s.AppendLine("| CONSUMED vs " + Names[cls] + " | " + hn[h] + " | " + am.Count + " / " + bm.Count + " | "
-                                 + F(Stats.Mean(am), 2) + " vs " + F(Stats.Mean(bm), 2) + " | " + F(t.T, 2) + " | " + P(t.P) + " | "
-                                 + Pc(ak, aw.Count) + " vs " + Pc(bk, bw.Count) + " | " + F(z.T, 2) + " | " + P(z.P) + " | "
-                                 + F(Stats.Mde(aw.Count, bw.Count, pooled) * 100, 1) + " pts |");
-                }
+                MoveTest t = tests[i];
+                bool pass = t.HolmP <= 0.05;
+                if (pass) survivors++;
+                if (pass && !double.IsNaN(t.PCluster) && t.PCluster <= 0.05) clusterSurvivors++;
+                s.AppendLine("| " + t.Pair + " | " + (t.Side == 1 ? "ask" : "bid") + " | " + HN[t.H] + " | "
+                             + t.N1 + " / " + t.N2 + " | " + F(t.M1, 2) + " vs " + F(t.M2, 2) + " | " + F(t.Diff, 2) + " | "
+                             + F(t.Mde, 2) + " | " + F(t.T, 2) + " | " + P(t.P) + " | " + P(t.HolmP) + (pass ? " **" : "") + " | "
+                             + t.Clusters + " | [" + F(t.CiLo, 2) + ", " + F(t.CiHi, 2) + "] | " + P(t.PCluster) + " |");
             }
             s.AppendLine();
-            s.AppendLine("> **Read the `move` columns, not the `P(through)` ones.** CONSUMED is DEFINED as \"the quote crossed the level\",");
-            s.AppendLine("> so it starts already through and the others start at 0% by construction. Only the move from the mid AT");
-            s.AppendLine("> resolution is a fair forward test, and it is the one that has to be significant for the label to be worth painting.");
-            s.AppendLine();
 
-            int censored = 0;
-            for (int i = 0; i < eps.Count; i++) if (!eps[i].Have[2]) censored++;
-            s.AppendLine("Censoring: " + censored + " of " + eps.Count + " episodes have no +60 s read (the tape ended first).");
-            int smallest = int.MaxValue;
-            for (int cls = 0; cls < 3; cls++) { int n = Bucket(eps, cls, -1).Count; if (n > 0 && n < smallest) smallest = n; }
-            if (smallest == int.MaxValue) smallest = 0;
-            if (eps.Count == 0) s.AppendLine();
-            else if (smallest < 30)
-                s.AppendLine("> **Underpowered.** The smallest outcome bucket holds " + smallest + " episodes. Percentages computed on that are noise with a decimal point; the p-values above are reported for completeness, not for belief. Episodes are also NOT independent — they cluster in time and several can sit on the same wall — so even a large n overstates the effective sample.");
+            int censored = 0, noWall = 0;
+            for (int i = 0; i < eps.Count; i++) { if (!eps[i].Have[2]) censored++; if (eps[i].Wall == null) noWall++; }
+            int allClusters = ClusterCount(eps);
+            s.AppendLine("Censoring: " + censored + " of " + eps.Count + " episodes have no +60 s read (the tape ended first). Clustering: "
+                         + eps.Count + " episodes sit on **" + allClusters + "** distinct walls (" + F(eps.Count / (double)Math.Max(1, allClusters), 1)
+                         + " episodes per wall),");
+            s.AppendLine("and they also cluster in TIME, which the wall bootstrap does not undo. Both push the same way: the");
+            s.AppendLine("effective n is smaller than the printed n, so every raw p above is optimistic and every CI is too narrow.");
+            s.AppendLine();
+            if (tests.Count == 0)
+                s.AppendLine("> **Nothing was testable.** No contrast had two episodes with a forward read on both sides.");
+            else if (survivors == 0)
+                s.AppendLine("> **Not one of the " + tests.Count + " contrasts survives Holm at 0.05.** On this tape the outcome label does not"
+                             + " separate the forward move of the mid, on either side, at any of the three horizons.");
+            else if (clusterSurvivors == 0)
+                s.AppendLine("> **" + survivors + " of " + tests.Count + " contrasts survive Holm, and NONE of them survives the wall bootstrap.**"
+                             + " That gap is the dependence: the i.i.d. test counted repeat episodes on one wall as independent evidence.");
             else
-                s.AppendLine("> Bucket sizes are large enough to read the percentages, but episodes are NOT independent — they cluster in time and several can sit on the same wall — so the effective n is smaller than the printed n and p-values are optimistic.");
+                s.AppendLine("> **" + clusterSurvivors + " of " + tests.Count + " contrasts survive BOTH Holm and the wall bootstrap.**"
+                             + " Read the sign, the side and the horizon: a result that flips sign between sides or tapes is a session, not a signal.");
             s.AppendLine();
         }
 
@@ -1086,7 +1359,23 @@ namespace SizeMap.Verdict
             return o;
         }
 
-        static List<EpisodeRec> Bucket(List<EpisodeRec> eps, int cls, int side)
+        static void CensusRow(StringBuilder s, string label, List<double> v, double lo, double hi)
+        {
+            s.AppendLine("| " + label + " | " + F(Stats.Mean(v), 2) + " | " + F(Stats.Median(v), 0) + " | "
+                         + F(Stats.Pct(v, 0.9), 0) + " | " + F(Stats.Pct(v, 1), 0) + " | "
+                         + (lo < 0 ? "n/a" : Band(v, lo, hi)) + " |");
+        }
+
+        public static string NameOf(int cls) { return Names[cls]; }
+
+        static int ClusterCount(List<EpisodeRec> b)
+        {
+            HashSet<string> h = new HashSet<string>();
+            for (int i = 0; i < b.Count; i++) h.Add(b[i].Wall ?? "?");
+            return h.Count;
+        }
+
+        public static List<EpisodeRec> Bucket(List<EpisodeRec> eps, int cls, int side)
         {
             List<EpisodeRec> o = new List<EpisodeRec>();
             for (int i = 0; i < eps.Count; i++)
@@ -1099,33 +1388,23 @@ namespace SizeMap.Verdict
             return o;
         }
 
-        static List<EpisodeRec> With(List<EpisodeRec> b, int h)
-        {
-            List<EpisodeRec> o = new List<EpisodeRec>();
-            for (int i = 0; i < b.Count; i++) if (b[i].Have[h]) o.Add(b[i]);
-            return o;
-        }
+        // CountThrough is gone with P(through): a comparison whose t0 level is fixed by the label's
+        // own definition cannot be a forward test, and printing it invited exactly the reading it
+        // does not support.
+        public static List<double> Moves(List<EpisodeRec> b, int h) { List<string> w; return Moves(b, h, out w); }
 
-        static int CountThrough(List<EpisodeRec> b, int h)
-        {
-            int n = 0;
-            for (int i = 0; i < b.Count; i++)
-            {
-                double mid = h < 0 ? b[i].MidAtResolve : b[i].Mid[h];
-                if (h >= 0 && !b[i].Have[h]) continue;
-                if (b[i].Side == Side.Ask ? mid > b[i].Price : mid < b[i].Price) n++;
-            }
-            return n;
-        }
-
-        static List<double> Moves(List<EpisodeRec> b, int h)
+        // One implementation, so the values and their cluster ids can never fall out of step — the
+        // bootstrap pairs them by index.
+        public static List<double> Moves(List<EpisodeRec> b, int h, out List<string> walls)
         {
             List<double> o = new List<double>();
+            walls = new List<string>();
             for (int i = 0; i < b.Count; i++)
             {
                 if (!b[i].Have[h]) continue;
                 double d = b[i].Mid[h] - b[i].MidAtResolve;
                 o.Add((b[i].Side == Side.Ask ? d : -d) / TickOf(b[i]));
+                walls.Add(b[i].Wall);
             }
             return o;
         }
@@ -1150,6 +1429,12 @@ namespace SizeMap.Verdict
             return Pc(n, v.Count);
         }
 
+        // NaN and Infinity are not JSON numbers and System.Text.Json aborts the whole document on
+        // one of them — which it did, at K_mult 4.0 on a tape with a one-cluster bucket, AFTER the
+        // .md was already written. `null` is what "could not be computed" means in JSON, and every
+        // consumer already reads it.
+        static double? N(double v) { return double.IsNaN(v) || double.IsInfinity(v) ? (double?)null : v; }
+
         static string Pc(int k, int n) { return n > 0 ? F(100.0 * k / n, 1) + "%" : "n/a"; }
         static string P(double p) { return double.IsNaN(p) ? "-" : (p < 1e-4 ? "<0.0001" : F(p, 4)); }
         static string F(double v, int d) { return double.IsNaN(v) ? "-" : v.ToString("F" + d, CultureInfo.InvariantCulture); }
@@ -1173,25 +1458,55 @@ namespace SizeMap.Verdict
             List<object> rows = new List<object>();
             for (int i = 0; i < 4; i++) rows.Add(new { classifier = Names[i], absorbed = m[i, 0], pulled = m[i, 1], consumed = m[i, 2] });
 
+            // Per side, and with no p_through: both are the Phase 3 corrections, and a JSON that
+            // still carried the pooled/tautological fields would let a future script re-derive the
+            // exact conclusion this report retracts.
             List<object> fwd = new List<object>();
             string[] hn = { "10s", "30s", "60s" };
-            for (int cls = 0; cls < 4; cls++)
-            {
-                List<EpisodeRec> b = Bucket(eps, cls, -1);
-                Dictionary<string, object> h = new Dictionary<string, object>();
-                for (int k = 0; k < 3; k++)
+            for (int side = 1; side >= 0; side--)
+                for (int cls = 0; cls < 4; cls++)
                 {
-                    List<EpisodeRec> w = With(b, k);
-                    List<double> mv = Moves(b, k);
-                    h[hn[k]] = new
+                    List<EpisodeRec> b = Bucket(eps, cls, side);
+                    Dictionary<string, object> h = new Dictionary<string, object>();
+                    for (int k = 0; k < 3; k++)
                     {
-                        n = w.Count,
-                        p_through = w.Count > 0 ? (double)CountThrough(w, k) / w.Count : (double?)null,
-                        mean_move_ticks = mv.Count > 0 ? Stats.Mean(mv) : (double?)null,
-                        median_move_ticks = mv.Count > 0 ? Stats.Median(mv) : (double?)null
-                    };
+                        List<double> mv = Moves(b, k);
+                        h[hn[k]] = new
+                        {
+                            n = mv.Count,
+                            mean_move_ticks = mv.Count > 0 ? Stats.Mean(mv) : (double?)null,
+                            median_move_ticks = mv.Count > 0 ? Stats.Median(mv) : (double?)null
+                        };
+                    }
+                    fwd.Add(new { side = side == 1 ? "ask" : "bid", outcome = Names[cls], n = b.Count, walls = ClusterCount(b), horizons = h });
                 }
-                fwd.Add(new { outcome = Names[cls], n = b.Count, p_through_t0 = b.Count > 0 ? (double)CountThrough(b, -1) / b.Count : (double?)null, horizons = h });
+
+            List<object> mt = new List<object>();
+            {
+                List<MoveTest> tests = new List<MoveTest>();
+                for (int p = 0; p < Pairs.GetLength(0); p++)
+                    for (int side = 1; side >= 0; side--)
+                        for (int k = 0; k < 3; k++)
+                        {
+                            MoveTest t = MoveTest.Build(eps, Pairs[p, 0], Pairs[p, 1], side, k);
+                            if (t != null) tests.Add(t);
+                        }
+                double[] rawp = new double[tests.Count];
+                for (int i = 0; i < tests.Count; i++) rawp[i] = tests[i].P;
+                double[] adj = Stats.Holm(rawp);
+                for (int i = 0; i < tests.Count; i++)
+                    mt.Add(new
+                    {
+                        contrast = tests[i].Pair,
+                        side = tests[i].Side == 1 ? "ask" : "bid",
+                        horizon = hn[tests[i].H],
+                        n1 = tests[i].N1, n2 = tests[i].N2,
+                        diff_ticks = N(tests[i].Diff), mde_ticks = N(tests[i].Mde),
+                        t = N(tests[i].T), p_raw = N(tests[i].P), p_holm = N(adj[i]),
+                        walls = tests[i].Clusters,
+                        cluster_ci = new double?[] { N(tests[i].CiLo), N(tests[i].CiHi) },
+                        p_cluster = N(tests[i].PCluster)
+                    });
             }
 
             List<double> wallAge = new List<double>();
@@ -1253,13 +1568,17 @@ namespace SizeMap.Verdict
                 {
                     walls_detected = r.WallsDetected,
                     walls_dead = r.Dead,
-                    lifetime_p50_sec = Stats.Median(r.Lifetimes),
-                    lifetime_p90_sec = Stats.Pct(r.Lifetimes, 0.9),
-                    peak_p50 = Stats.Median(r.Peaks),
-                    census_live_mean = Stats.Mean(r.Live),
-                    census_remembered_mean = Stats.Mean(r.Remembered),
-                    census_live_mean_band25 = Stats.Mean(r.LiveBand),
-                    census_remembered_mean_band25 = Stats.Mean(r.RememberedBand),
+                    lifetime_p50_sec = N(Stats.Median(r.Lifetimes)),
+                    lifetime_p90_sec = N(Stats.Pct(r.Lifetimes, 0.9)),
+                    peak_p50 = N(Stats.Median(r.Peaks)),
+                    census_solid_mean = N(Stats.Mean(r.Solid)),
+                    census_hollow_mean = N(Stats.Mean(r.Hollow)),
+                    census_undrawn_mean = N(Stats.Mean(r.Undrawn)),
+                    census_solid_mean_band25 = N(Stats.Mean(r.SolidBand)),
+                    census_hollow_mean_band25 = N(Stats.Mean(r.HollowBand)),
+                    census_samples = r.CensusSamples,
+                    cap_hit_solid = r.CapHitSolid,
+                    cap_hit_hollow = r.CapHitHollow,
                     episodes = eps.Count,
                     split = new { absorbed = split[0], pulled = split[1], consumed = split[2], unclassified = split[3] }
                 },
@@ -1271,11 +1590,12 @@ namespace SizeMap.Verdict
                     agreement_rate = classified > 0 ? (double)agree / classified : (double?)null
                 },
                 q3_forward = fwd,
-                q3_drift_control_ticks = new { h10 = Drift(r, 10), h30 = Drift(r, 30), h60 = Drift(r, 60), census_samples = r.MidSeries.Count },
+                q3_move_tests_holm = mt,
+                q3_drift_control_ticks = new { h10 = N(Drift(r, 10)), h30 = N(Drift(r, 30)), h60 = N(Drift(r, 60)), census_samples = r.MidSeries.Count },
                 q4_ledger = new
                 {
-                    wall_age_p50_sec = Stats.Median(wallAge),
-                    wall_age_max_sec = Stats.Pct(wallAge, 1),
+                    wall_age_p50_sec = N(Stats.Median(wallAge)),
+                    wall_age_max_sec = N(Stats.Pct(wallAge, 1)),
                     walls_older_than_retention = overWall,
                     episodes_with_trade_and_cancel = both,
                     retention_experiment = retention

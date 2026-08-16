@@ -35,6 +35,9 @@ namespace SizeMap.Engine
             public double Price;
             public long SizeAtOpen;
             public DateTime OpenTime;
+            // Crossed is a latch, but for a resolved episode it is also the instant read: Update()
+            // resolves on the same pass that first sees displayed == 0. No CrossedAtVanish field —
+            // it was added, measured identical to this on 5,622 episodes, and removed.
             public bool Crossed;           // inside quote ever crossed P
             public bool QuoteAwayAtVanish; // quote was >= D_pull ticks away when size hit 0
             public bool Vanished;
@@ -101,6 +104,30 @@ namespace SizeMap.Engine
             long cancelled = Math.Max(0, drop - traded);
 
             Outcome o;
+            // PHASE 3, and do not re-litigate this without reading the numbers.
+            //
+            // `Consumed` winning on `ep.Crossed` alone is why PULLED fired once in 7,454 episodes.
+            // Two fixes were implemented and measured on three distinct ES tapes at the shipped 4 Hz
+            // (docs/verdict, 5,622 episodes):
+            //
+            //  A. Test Pulled FIRST when the level emptied and the quote had not crossed AT THAT
+            //     INSTANT. Zero label changes — 1434/1434, 695/695, 3493/3493 identical. It cannot
+            //     fire: Update() resolves an episode in the SAME pass that sets Vanished, so
+            //     `ep.Crossed` at resolution IS the cross at the vanish instant. A latch set in an
+            //     earlier pass would have resolved the episode in that earlier pass. Pinned by
+            //     Crossed_latching_resolves_in_the_same_pass_so_reordering_cannot_help.
+            //  B. Arm episodes at D_approach = 2 instead of 1. Zero new pulls, and refusals went
+            //     37.7/33.4/46.0% -> 56.5/53.5/64.0%. Deaths observed barely moved (775->794,
+            //     416->428, 1704->1720): the set of wall deaths is a property of the tape, not of the
+            //     arming distance, and every added episode timed out without seeing one.
+            //
+            // The real blocker is that QuoteCrossed(Ask, P) is `bestAsk > P`, which removing the
+            // level at P makes true by construction — it restates the level's own death instead of
+            // reporting a market fact. Emptied-and-crossed stayed 99.9-100.0% under EVERY variant.
+            // Before anyone rewrites it: the 15-21% of deaths that are majority-cancelled were
+            // measured for forward information (mid at +10/+30/+60 s vs the trade-explained deaths)
+            // and carry NONE — 9 tests, every p >= 0.14, signs disagreeing across tapes. Making the
+            // glyph reachable is cheap; making it mean something is the part that is not done.
             if (ep.Crossed)
                 o = Outcome.Consumed;
             else if (traded >= _cfg.A_absorb * ep.SizeAtOpen

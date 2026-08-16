@@ -69,6 +69,38 @@ public class EpisodeClassifierTests
         Assert.Equal(Outcome.Consumed, r.Outcome);
     }
 
+    // PHASE 3, mechanism A. The proposal was: keep the cross state AT THE INSTANT the size hit zero
+    // and test Pulled before Consumed on it, because `ep.Crossed` is a latch over the whole episode.
+    // It was implemented, measured on three ES tapes (5,622 episodes) and changed ZERO labels, and
+    // this is why: Update() resolves an episode in the SAME pass that first latches the cross, so a
+    // latch can never survive into a later vanish. Latch and instant are the same read, always.
+    //
+    // If someone decouples resolution from the cross — a settle window, a two-pass resolve — this
+    // test fails, and mechanism A is worth measuring again. That is the only thing that would
+    // change the answer, so it is the thing pinned here.
+    [Fact]
+    public void Crossed_latching_resolves_in_the_same_pass_so_reordering_cannot_help()
+    {
+        var c = new EpisodeClassifier(new RadarConfig());
+        var book = BookAskWall(200);
+        c.OnApproach(Side.Ask, 21000.50, 200, T0);
+
+        // The quote crosses while the wall STILL SHOWS 200. NT's depth stream is positional, so a
+        // ladder shift can leave a stale row behind the new inside — this is that book, not a fiction.
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 0, Price = 21000.75, Volume = 15, Time = T0.AddMilliseconds(100) });
+        c.Update(book, T0.AddMilliseconds(200));
+
+        Assert.True(c.TryTakeResolved(out var r));
+        Assert.Equal(Outcome.Consumed, r.Outcome);
+        Assert.False(c.HasOpenEpisode(Side.Ask, 21000.50));   // resolved on the cross, not held open
+
+        // The level empties AFTER the cross latched. There is no episode left for a reordered test
+        // to relabel — which is exactly why testing Pulled first cannot move a single label.
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Remove, Position = 1, Price = 21000.50, Volume = 0, Time = T0.AddMilliseconds(300) });
+        c.Update(book, T0.AddMilliseconds(400));
+        Assert.False(c.TryTakeResolved(out _));
+    }
+
     [Fact]
     public void OnApproach_is_idempotent_while_open()
     {

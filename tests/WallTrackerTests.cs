@@ -153,6 +153,67 @@ public class WallTrackerTests
         Assert.Equal(NodeState.Remembered, node.State);
     }
 
+    // PHASE 3, the invention guard. A mechanism that invents pulls is worse than one that cannot
+    // emit them: a missing glyph costs a reader nothing, a confident wrong one costs him a trade.
+    //
+    // Synthetic tape where NOTHING is ever cancelled — every lot that leaves the wall is matched by
+    // a print at that price — and the wall dies WITHOUT the quote crossing it, which is the one
+    // geometry where the Pulled branch is even reachable. The only thing standing between this tape
+    // and a PULLED label is `cancelled > traded` in EpisodeClassifier.TryClassify. Delete that
+    // clause, or hoist Pulled above Consumed without it, and this test goes red.
+    //
+    // D_approach = 2 on purpose: a wall behind the touch is what mechanism B arms on, so the guard
+    // covers that arming too.
+    [Fact]
+    public void No_pull_is_invented_when_every_size_drop_is_explained_by_trades()
+    {
+        var cfg = new RadarConfig { D_approach = 2 };
+        var wt = new WallTracker(cfg);
+        var book = NewBook();
+        const double Wall = 21000.50;
+
+        // Ask wall one tick BEHIND the inside, so its death cannot move the best ask.
+        book.ApplyDepth(new DepthEvent { Side = Side.Bid, Op = DepthOp.Add, Position = 0, Price = 21000.00, Volume = 10, Time = T0 });
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 0, Price = 21000.25, Volume = 10, Time = T0 });
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 1, Price = Wall, Volume = 200, Time = T0 });
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 2, Price = 21000.75, Volume = 10, Time = T0 });
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 3, Price = 21001.00, Volume = 10, Time = T0 });
+
+        var outcomes = new List<Outcome>();
+        void Run(DateTime t)
+        {
+            wt.Update(book, t);
+            foreach (var r in wt.ResolvedThisUpdate) outcomes.Add(r.Outcome);
+            // The tape's defining property, asserted rather than assumed: no open episode ever sees
+            // a lot go missing. If this trips, the test is no longer testing what it claims to.
+            foreach (var e in wt.ErosionReads(book, t)) Assert.Equal(0L, e.Cancelled);
+        }
+
+        Run(T0);
+        Run(T0.AddMilliseconds(1600));                       // T_persist elapsed: promoted and armed
+        Assert.NotEmpty(wt.ErosionReads(book, T0.AddMilliseconds(1600)));
+
+        // Eaten in four bites, each one fully printed at the wall price (buy aggressor: the print is
+        // at or above the inside ask, which is how BookMirror infers it).
+        long left = 200;
+        for (int i = 1; i <= 4; i++)
+        {
+            DateTime t = T0.AddMilliseconds(1600 + i * 100);
+            book.ApplyTrade(new TradeEvent { Price = Wall, Volume = 50, Time = t });
+            left -= 50;
+            book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Update, Position = 1, Price = Wall, Volume = left, Time = t });
+            Run(t);
+        }
+
+        // Empty and gone, with the best ask still BELOW it: `Crossed` is false, so Consumed does not
+        // pre-empt anything and the Pulled branch is the next one tested.
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Remove, Position = 1, Price = Wall, Volume = 0, Time = T0.AddSeconds(2.1) });
+        Run(T0.AddSeconds(2.1));
+
+        Assert.Empty(wt.ErosionReads(book, T0.AddSeconds(2.1)));   // the episode really did resolve
+        Assert.DoesNotContain(Outcome.Pulled, outcomes);
+    }
+
     // Round-6: WallTracker.TrustedSize backs the armed-wall identity feed's bounded blind-trust.
     [Fact]
     public void TrustedSize_returns_last_known_size_when_in_window_regardless_of_age()
