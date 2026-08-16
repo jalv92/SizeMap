@@ -36,7 +36,14 @@ namespace SizeMap.Engine
             public double Fps;
         }
 
-        const int PlateW = 196, PlateH = 78, Margin = 8;
+        // PUBLIC because the tests were duplicating these numbers and three of them broke the day
+        // the legend moved — not because the layout was wrong, but because the assertions had
+        // copied it. A test that hardcodes what it verifies is testing its own copy.
+        public const int PlateW = 196, PlateH = 78, Margin = 8;
+
+        // The HUD's origin. Y clears NinjaTrader's own indicator label row, which it draws across
+        // the top of the panel at its own z-order and which SizeMap cannot move or measure.
+        public const int HudX = 6, HudY = 22;
         const int StripW = 120, StripH = 8;
         const int LedgerW = 44;
 
@@ -47,7 +54,14 @@ namespace SizeMap.Engine
             if (px == null || w <= 0 || h <= 0) return;
             if (scale < 1) scale = 1;
 
-            int x = 6 * scale, y = 6 * scale, c = x;
+            // Below NinjaTrader's own indicator label row, not on top of it. NT8 prints
+            // "OrderLineDecorator, Bar timer(...), SizeMapHeat(...)" across the top of the panel at
+            // its own z-order, and starting at y = 6 put two strings of text through each other —
+            // both unreadable. There is no API for the label row's height; 22 px at scale 1 clears
+            // the single line NT8 draws and is the smallest number that does.
+            // ponytail: a constant. Ceiling — a user with two lines of indicator labels still
+            // collides. Upgrade path — offset by ChartControl.Properties.LabelFont's line height.
+            int x = HudX * scale, y = HudY * scale, c = x;
 
             c += BitmapFont.Draw(px, w, h, c, y, "SIZEMAP", Palette.Text, scale);
             if (!string.IsNullOrEmpty(i.Instrument))
@@ -93,7 +107,13 @@ namespace SizeMap.Engine
             if (w < 500 || h < 300) return false;                 // spec §5.2 auto-hide
 
             int pw = PlateW * scale, ph = PlateH * scale;
-            int x0 = w - pw - Margin * scale, y0 = h - ph - Margin * scale;
+            // BOTTOM-LEFT, not bottom-right. The raster sits at SetZOrder(-1), so the candles paint
+            // straight through this plate and there is no z-order fix — it is all-or-nothing for the
+            // whole indicator. What CAN be chosen is where the plate sits, and the right-hand side is
+            // exactly where the newest bars are: on a falling market the candles walked into the key
+            // and made it unreadable. The left edge holds the oldest bars on screen, which are the
+            // ones already read.
+            int x0 = Margin * scale, y0 = h - ph - Margin * scale;
             if (x0 < 0 || y0 < 0) return false;
 
             Rect(px, w, h, x0, y0, pw, ph, Palette.Plate);

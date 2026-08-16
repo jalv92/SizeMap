@@ -98,6 +98,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IsSuspendedWhileInactive = false;
 
 				MinutesOfHistory         = 30;
+				WallSizeMultiple         = 1.5;   // measured for ES; raise toward 4.0 on NQ
+				MinWallLots              = 40;
 				RecordRaw                = true;
 				ShowLegend               = true;
 			}
@@ -123,7 +125,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// census will be wrong in one direction or the other, which is what the HUD's WALLS
 				// counter is for. Upgrade path — calibrate against the recorded corpus, then either
 				// change the defaults or expose the two that move (K_mult, MinAbsSize) as properties.
-				_radarCfg  = new RadarConfig { TickSize = _tick };
+				// K_mult and MinAbsSize are per-INSTRUMENT and the shipped defaults are NQ numbers.
+				// Measured on real ES tape: ES rests ~70 lots a level, so K_mult 4.0 demands 280 and
+				// finds 9 walls in 82 minutes — a census of 0L 0R 0F on Javier's chart, which reads
+				// as "broken" and is actually "asked for a wall four times bigger than this market
+				// makes". At 1.5 ES lands in the design's live/remembered band. NQ is thinner and
+				// wants the higher number, which is exactly why this cannot be one constant.
+				_radarCfg  = new RadarConfig { TickSize = _tick, K_mult = WallSizeMultiple, MinAbsSize = MinWallLots };
 				_tracker   = new WallTracker(_radarCfg);
 				_ring      = new ColumnRing(Math.Max(2, MinutesOfHistory * 60 * 1000 / ColumnRing.BucketMs), 48);
 				SeedFromSnapshot();
@@ -876,7 +884,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 		public bool RecordRaw { get; set; }
 
 		[NinjaScriptProperty]
-		[Display(Name = "Show legend", Description = "The 196x78 key in the bottom-right corner. It hides itself on a panel under 500x300 regardless.", Order = 3, GroupName = "SizeMap")]
+		[Range(1.0, 20.0)]
+		[Display(Name = "Wall size multiple (K)", Description = "How many times the median level a resting size must be to count as a wall. PER INSTRUMENT: measured 1.5 for ES (rests ~70 lots/level), 4.0 for NQ. Watch the WALLS token in the HUD — the design band is 2-6 live and 10-25 remembered. A steady 0L is this dial, not a quiet market.", Order = 4, GroupName = "SizeMap")]
+		public double WallSizeMultiple { get; set; }
+
+		[NinjaScriptProperty]
+		[Range(1, 10000)]
+		[Display(Name = "Minimum wall lots", Description = "Absolute floor a wall must clear as well as the multiple, so a dead-thin book cannot promote a 6-lot level.", Order = 5, GroupName = "SizeMap")]
+		public int MinWallLots { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show legend", Description = "The 196x78 key in the bottom-LEFT corner (the right side is where the newest bars are, and the candles paint through it). It hides itself on a panel under 500x300 regardless.", Order = 3, GroupName = "SizeMap")]
 		public bool ShowLegend { get; set; }
 		#endregion
 	}

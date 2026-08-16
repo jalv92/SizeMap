@@ -54,8 +54,8 @@ namespace SizeMap.Tests
                 int[] px = new int[W * H];
                 Assert.True(Chrome.DrawLegend(px, W, H, p, 1));
 
-                // Plate at (W-204, H-86); strip 120 px wide at +8, 8 px tall at +6.
-                int x0 = W - 204, y0 = H - 86, y = y0 + 6 + 3;
+                // Origin read from Chrome, never restated: the plate has already moved once.
+                int x0 = Chrome.Margin, y0 = H - Chrome.PlateH - Chrome.Margin, y = y0 + 6 + 3;
                 for (int i = 0; i < 120; i++)
                     Assert.Equal(unchecked((int)p.Lut[i * 255 / 119]), px[y * W + x0 + 8 + i]);
 
@@ -80,7 +80,7 @@ namespace SizeMap.Tests
         [Fact]
         public void A_slow_frame_escalates_the_readout_to_full_contrast()
         {
-            const int Y0 = 6 + BitmapFont.LineHeight, Y1 = Y0 + BitmapFont.GlyphH;
+            const int Y0 = Chrome.HudY + BitmapFont.LineHeight, Y1 = Y0 + BitmapFont.GlyphH;
 
             Chrome.HudInfo fast = Info();
             int[] a = new int[W * H];
@@ -105,7 +105,7 @@ namespace SizeMap.Tests
         // Two lines, top-left, and nothing anywhere else: the HUD must not be able to scribble over
         // the heat field it sits on.
         [Fact]
-        public void The_hud_stays_inside_two_lines_at_the_top_left()
+        public void The_hud_stays_inside_two_lines_below_the_label_row()
         {
             int[] px = new int[W * H];
             Chrome.DrawHud(px, W, H, Info(), 1);
@@ -113,10 +113,10 @@ namespace SizeMap.Tests
             Assert.True(Count(px, Palette.Text) > 50);          // it drew real text
             Assert.True(Count(px, Palette.NotTraded) > 50);
 
-            int bottom = 6 + BitmapFont.LineHeight + BitmapFont.GlyphH;
+            int bottom = Chrome.HudY + BitmapFont.LineHeight + BitmapFont.GlyphH;
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++)
-                    if (y < 6 || y >= bottom || x < 6)
+                    if (y < Chrome.HudY || y >= bottom || x < Chrome.HudX)
                         Assert.Equal(0, px[y * W + x]);
         }
 
