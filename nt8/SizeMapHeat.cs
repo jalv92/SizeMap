@@ -440,8 +440,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			long  bucketEnd = (ColumnRing.BucketOf(nowTicks) + 1) * ColumnRing.BucketTicks;
 			float nowX      = xRight + (float)((bucketEnd - lastClose.Ticks) / (double)TimeSpan.TicksPerMillisecond) * pxPerMs;
 
+			// SELF-CHECK, and it costs two calls a frame. The row map is ONE anchor plus a constant
+			// pxPerTick, which is only true if NinjaTrader's own price scale is exactly linear over
+			// the visible range. Measured on a zoomed-out ES chart, the heat sat up to 96 px BELOW
+			// the candles — an error that grew linearly away from the anchor, which is the signature
+			// of a wrong pxPerTick rather than a wrong anchor. Rather than infer that from
+			// screenshots, ask NT8 where a price goes and compare. If _projErr is not ~0 the
+			// projection is lying and the whole raster is misplaced.
+			double probeP = cs.MinValue + (cs.MaxValue - cs.MinValue) * 0.85;
+			int    ntY    = cs.GetYByValue(probeP) - panelY;
+			float  ourY   = anchorY - ((float)Math.Round(probeP / _tick) - anchorRow) * pxPerTick;
+			_projErr      = ourY - ntY;
+			_projPxTick   = pxPerTick;
+			_projSpan     = cs.MaxValue - cs.MinValue;
+
 			return new RasterView(anchorRow, anchorY, pxPerTick, nowTicks, nowX, pxPerMs * ColumnRing.BucketMs);
 		}
+
+		private float  _projErr;      // our row map minus NT8's, in px, at 85% up the visible range
+		private float  _projPxTick;
+		private double _projSpan;
 
 		// The projections above are only true on a linear price axis and an equidistant, time-based
 		// x-axis. Where they are not, SizeMap draws nothing: a plausible lie about where liquidity sat
@@ -623,6 +641,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				"SizeMapHeat {0}  {1:0.00}ms (ema {2:0.00})  panel {3}x{4}  col {5}ms  row {6}t  s0 {7} cap {8}  obs {9}L",
 				Instrument.MasterInstrument.Name, ms, _emaMs, pw, ph, columnMs, rowTicks,
 				Volatile.Read(ref _s0), Volatile.Read(ref _sCap), Volatile.Read(ref _levelsSeen)));
+
+			// PROJ is the row map grading itself against NinjaTrader. err is how far our y for a
+			// known price lands from where NT8 puts it, near the top of the visible range: ~0 means
+			// the linear map holds, tens of px means every row on screen is in the wrong place.
+			Print(string.Format(
+				"   PROJ err {0:+0.0;-0.0;0.0}px  pxTick {1:0.000}  span {2:0.00}pts  anchor {3}@{4:0.0}",
+				_projErr, _projPxTick, _projSpan, v.AnchorRow, v.AnchorY));
 
 			Print(string.Format(
 				"   ring pub {0} ovf {1} late {2}  epochs {3}  rec {4}",
