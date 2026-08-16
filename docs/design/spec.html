@@ -194,12 +194,16 @@
     <p class="figlabel">A · NQ, 10 levels, six minutes in</p>
     <img src="__IMG_A__" alt="SizeMap at 10 levels of depth: a narrow blue-and-gold liquidity ribbon tracking price, two bright gold wall bands with dark grooves, four hollow dashed remembered walls at different dash densities each ending in an outcome glyph, and two consumption ledgers in the right margin.">
     <figcaption>
-      The live book is a <b>narrow ribbon</b> — ten levels is 2.50 points a side, so it can only ever
-      be a band that sweeps with price. Everything above and below it is <b>remembered</b>: hollow,
-      never filled, drawn at the brightness the wall had when it was last seen. Dash density is
-      confidence — solid, dashed, dotted, gone. Each remembered band ends in the glyph that says
-      how it died. The two gold bands with the dark groove above and below are confirmed live walls;
-      their ledgers sit in the empty margin at the right.
+      <b>There are no candles.</b> The price is the white stepped pair running through the ribbon —
+      best bid and best ask — and the dark gap between them is the spread. The live book is a
+      <b>narrow ribbon</b>: ten levels is 2.50 points a side, so it can only ever be a band that
+      sweeps with price. Everything above and below it is <b>remembered</b>: hollow, never filled,
+      drawn at the brightness the wall had when it was last seen. Dash density is confidence —
+      solid, dashed, dotted, gone. The two gold bands with the dark groove are confirmed live walls;
+      their ledgers sit in the empty margin at the right. The black region on the left is
+      <b>before the recording started</b>: the book was never observed there, so it is painted ink
+      rather than background, and the price trace goes dashed because it is reconstructed from the
+      quote at each historical trade rather than watched live.
     </figcaption>
   </figure>
 
@@ -207,11 +211,14 @@
     <p class="figlabel">B · ES, 40 levels, three hours in</p>
     <img src="__IMG_B__" alt="SizeMap at 40 levels of depth: a dense blue liquidity field covering most of the chart height with three bright gold wall bands, saturation marks, remembered bands below, and three stacked consumption ledgers in the right margin.">
     <figcaption>
-      Nothing about the grammar changed — same ramp, same threshold, same marks. Depth changes the
-      <b>fill ratio</b>, not the design: the field goes from ~14% of the panel to ~50%. The three
-      walls still read as the loudest objects on screen because the ramp spends its entire budget on
-      magnitude, and the field stays at low chroma so it never vibrates. Two walls carry the
-      <b>saturation mark</b> — the double white tick meaning "off the top of the scale".
+      Nothing about the grammar changed — same ramp, same threshold, same marks, same trace. Depth
+      changes the <b>fill ratio</b>, not the design: the field goes from ~14% of the panel to ~50%.
+      The three walls still read as the loudest objects on screen because the ramp spends its entire
+      budget on magnitude, and the field stays at low chroma so it never vibrates. Two walls carry
+      the <b>saturation mark</b> — the double white tick meaning "off the top of the scale". At this
+      zoom each pixel column folds many quotes, so the trace shows the <b>extent</b> of the touch
+      rather than the spread; the HUD says <code>EXT</code> instead of <code>SPRD</code> so the
+      change is stated rather than silent.
     </figcaption>
   </figure>
 </section>
@@ -323,7 +330,62 @@
 </section>
 
 <section>
-  <h2><span class="num">05</span> The ledger — the whole product</h2>
+  <h2><span class="num">05</span> The touch trace — the price, without candles</h2>
+  <div class="measure">
+    <p>NinjaTrader's bars are not required. A 25-line custom chart style whose renderer is empty
+    makes them draw nothing, and everything that matters survives it — the price axis, auto-scaling,
+    the last-price marker, the crosshair, Chart Trader's order lines. The <code>Bars</code> object
+    still holds every value; only the painted glyph is gone.</p>
+    <p>Which is worth doing, because a candle and this heatmap disagree about time by
+    <strong>240 to 1</strong>. One pixel column of heat is 3.5 seconds; the candle beside it is a
+    60-second summary drawn as a single glyph. And because the whole raster sits behind the bars, a
+    candle body lands squarely on the wall row being eaten — occluding the one moment the product
+    exists to show.</p>
+    <p>So the price becomes what actually touches the liquidity: <strong>best bid and best ask</strong>,
+    stepped, never interpolated. No diagonals — price lives on a 0.25 grid and a diagonal draws
+    prices that never existed. No last-trade line, because every print happens at or inside the touch,
+    so it would lie on top of a line already drawn.</p>
+  </div>
+
+  <div class="callout">
+    <p><span class="big">ΔL 0.381 — worst case, any colour</span>
+    A 1&nbsp;px near-white core with a 1&nbsp;px ink casing on each side. The core alone fails on
+    backgrounds lighter than L&nbsp;0.835; the casing alone fails on those darker than L&nbsp;0.272.
+    Those ranges are <strong>disjoint, with a 0.56 gap</strong> — so no colour that can ever appear on
+    this chart defeats the pair. Zero hue spent, two tokens the palette already had.</p>
+  </div>
+
+  <div class="measure">
+    <h3>The pixel that pays for itself</h3>
+    <p>The ask core sits one pixel <em>above</em> its quoted row, so its lower casing lands on that
+    row's top edge — which, when the ask is parked on a confirmed wall, is already
+    <strong>that wall's own ink groove</strong>. Same colour, so the write does nothing. The trace
+    costs the wall it is eating <strong>zero heat pixels</strong>, right through the absorption.</p>
+
+    <h3>Folding, and the word for what you are seeing</h3>
+    <p>When 14 quarter-second quotes fold into one pixel column, the trace draws the
+    <strong>min and max</strong> of that column, never the mean — a mean invents a price that was
+    never quoted. Line thickness then reads as volatility for free. But it stops being the spread and
+    becomes the extent, so the HUD switches from <code>SPRD</code> to <code>EXT</code> and says which
+    one you are looking at.</p>
+
+    <h3>History, and the trap in it</h3>
+    <p>Depth still has no past — the heat begins at the <code>REC</code> rule and that never changes.
+    Price does: with Tick Replay on, the inside quote at every historical trade is available, so the
+    trace covers the whole chart. It is drawn <strong>dashed, uncased, on ink ground</strong>, because
+    a quote sampled at trades is a different observation than a book watched continuously, and the
+    grammar already says <em>solid means observed, dashed means reconstructed</em>.</p>
+    <p>The trap: when a feed carries no bid/ask alongside its tick data, NinjaTrader
+    <strong>fabricates one</strong> — bid = last, ask = bid + 1 tick. Rendered naively that is a
+    flawless, perfectly constant one-tick spread that looks like the best data in the file. SizeMap
+    counts it and, if more than 99% of historical spreads are exactly one tick while the live spread
+    varies, collapses to a single line and prints <code>Q:SYN</code>. One honest line beats two
+    beautiful lies.</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">06</span> The ledger — the whole product</h2>
   <div class="measure">
     <p>In the blank margin right of the last bar, 44&nbsp;px wide, vertically centred on the wall's
     band. Three segments. A 620-lot ask wall now showing 160, of the 460 that disappeared 400 were
@@ -354,7 +416,7 @@
 </section>
 
 <section>
-  <h2><span class="num">06</span> Deliberately not drawn</h2>
+  <h2><span class="num">07</span> Deliberately not drawn</h2>
   <ul class="cut">
     <li><span class="what">Blur, glow, feathering</span><span class="why">The data is one tick by 250&nbsp;ms. Anything smoother is a claim about resolution the feed cannot support.</span></li>
     <li><span class="what">Animation of any kind</span><span class="why">NT8 caps chart repaint at 250&nbsp;ms. A pulse is a stutter.</span></li>
@@ -363,20 +425,23 @@
     <li><span class="what">Bookmap's second hot ramp</span><span class="why">Measured: a −0.13 lightness drop at the seam. A big orange wall renders darker than a medium white one.</span></li>
     <li><span class="what">Callout boxes, side panels, summary panels</span><span class="why">~28% of the plot area and a collision solver, to restate what the heat and the ledger already say.</span></li>
     <li><span class="what">An in-chart DOM ladder</span><span class="why">NT8 ships a SuperDOM. Duplicating it costs 20% of the chart width for data one keystroke away.</span></li>
-    <li><span class="what">Historical backfill</span><span class="why">Depth never fires on historical bars. A vertical REC rule discloses where the record starts; faking it would make every other honesty rule worthless.</span></li>
+    <li><span class="what">Historical <em>depth</em> backfill</span><span class="why">Depth never fires on historical bars. The REC rule discloses where the record starts; faking it would make every other honesty rule worthless. Historical <em>price</em> is drawn — dashed, on ink ground, as a different observation class.</span></li>
+<li><span class="what">A spread fill</span><span class="why">The rows between bid and ask hold no resting size, and ramp stop 0 already means exactly that. Painting them would re-encode what the ramp says and spend the one dark value reserved for structure.</span></li>
+<li><span class="what">Trade bubbles</span><span class="why">Every print happens at or inside the touch, so every bubble would land on the trace — which already says "traded here", continuously, with no density artefact.</span></li>
     <li><span class="what">Any licence server</span><span class="why">Runs offline, no token, no phone-home. The benchmark product stops working when its backend does.</span></li>
   </ul>
 </section>
 
 <section>
-  <h2><span class="num">07</span> Only you can answer these</h2>
+  <h2><span class="num">08</span> Only you can answer these</h2>
   <ul class="qa">
     <li><span class="q">Q1</span><span class="body"><b>Stop 5 is a khaki</b> and it is on screen constantly. Warm, or dirty? It cannot rotate further from green — if it bothers you the fix is chroma, not hue. Judge it after a full session, not in ten minutes.</span></li>
     <li><span class="q">Q2</span><span class="body"><b>Hollow bands at 10 levels.</b> With fifteen-plus on screen, does it read as a liquidity map or as scaffolding? This is the single biggest open risk in the design and no amount of specification settles it.</span></li>
     <li><span class="q">Q3</span><span class="body"><b>The ink groove.</b> At your monitor's gamma, is one pixel above and below a bright band enough to say "this is a confirmed object"? If not it goes to two, before anything gets a colour.</span></li>
     <li><span class="q">Q4</span><span class="body"><b>Everything is behind the candles</b> — including the HUD and the legend. That is the price of <code>SetZOrder(-1)</code> and it is all-or-nothing. If a candle lands on your legend often enough to annoy you, the fix is a second thin indicator at default z-order.</span></li>
     <li><span class="q">Q5</span><span class="body"><b>Rose against grey at 5&nbsp;px tall.</b> They are the same lightness by design and differ only in chroma. Confirm that survives on your screen — if it does not, the ledger gets taller; the colours do not change.</span></li>
-  </ul>
+  <li><span class="q">Q6</span><span class="body"><b>Trade one session with the candles already invisible.</b> Three colour pickers set to Transparent in Data Series — no install, reversible in ten seconds. If you catch yourself squinting for a wick or a session open, candles stay and the trace ships off by default. Nothing else settles it.</span></li>
+</ul>
 </section>
 
 <footer>
