@@ -42,6 +42,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// Ported from RadarTab.MaybeRunEngine / BigPrintsRecorder.TimeCheckLocked. A Playback
 		// slider rewind does NOT re-run DataLoaded, so without this the file splices two tape
 		// epochs into one timeline and every calibration built on it is silently wrong.
+		// Observed on Javier's first live run and deliberately NOT changed: dragging the Playback
+		// slider before starting emits a burst of timestamps seconds apart, so this fired eight
+		// times and left eight .smr files of 3-8 records each next to the real 1.4M-record one.
+		// Those splits are correct. Two fixes were tried and both were worse: deferring the break
+		// does nothing (those epochs DO carry records), and letting several epochs share a file
+		// destroys the property the split exists for — one file is one monotonic timeline, so a
+		// corpus reader is `np.fromfile(offset=32)` and never a parser. Tidy listings are not worth
+		// that. An analysis pass skips files under a few KB in one line.
 		private const double BackwardsTolSecs = 2;    // cross-thread timestamp skew, not a rewind
 		private const double JumpForwardSecs = 30;    // bigger forward gap than any real quiet tape
 
