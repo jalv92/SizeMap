@@ -1,0 +1,137 @@
+using System;
+using SizeMap.Engine;
+using Xunit;
+
+public class EpisodeClassifierTests
+{
+    static readonly DateTime T0 = new DateTime(2026, 6, 28, 9, 30, 0, DateTimeKind.Utc);
+
+    // Ask wall at 21000.50; bids below. Buy aggressors (prints at/above ask) consume an ask wall.
+    static BookMirror BookAskWall(long askWallSize, double bestAsk = 21000.50, double bestBid = 21000.25)
+    {
+        var b = new BookMirror(0.25, TimeSpan.FromSeconds(30));
+        b.ApplyDepth(new DepthEvent { Side = Side.Bid, Op = DepthOp.Add, Position = 0, Price = bestBid, Volume = 20, Time = T0 });
+        b.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 0, Price = bestAsk, Volume = askWallSize, Time = T0 });
+        return b;
+    }
+
+    [Fact]
+    public void Absorbed_when_trades_explain_drop_price_holds_and_level_refills()
+    {
+        var cfg = new RadarConfig();
+        var c = new EpisodeClassifier(cfg);
+        var book = BookAskWall(200);
+        c.OnApproach(Side.Ask, 21000.50, 200, T0);
+        // Heavy buying lifts the offer but it refills: displayed stays ~200, big Traded@P.
+        for (int i = 1; i <= 5; i++)
+            book.ApplyTrade(new TradeEvent { Price = 21000.50, Volume = 120, Time = T0.AddMilliseconds(i * 100) });
+        // Still showing 200 (iceberg refill), price held at the ask.
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Update, Position = 0, Price = 21000.50, Volume = 200, Time = T0.AddMilliseconds(600) });
+        c.Update(book, T0.AddMilliseconds(700));
+        c.Update(book, T0.AddSeconds(4)); // timeout resolves
+        Assert.True(c.TryTakeResolved(out var r));
+        Assert.Equal(Outcome.Absorbed, r.Outcome);
+        Assert.True(r.Traded >= 200);   // 5 × 120 = 600 ≥ A_absorb·S0; iceberg refill
+        Assert.Equal(0L, r.Cancelled);  // displayed_drop = 0; nothing cancelled
+    }
+
+    [Fact]
+    public void Pulled_when_size_vanishes_without_trades_and_quote_away()
+    {
+        var cfg = new RadarConfig();
+        var c = new EpisodeClassifier(cfg);
+        var book = BookAskWall(200); // quote at 21000.50, approach within 1 tick from bid 21000.25
+        c.OnApproach(Side.Ask, 21000.50, 200, T0);
+        // No trades at the wall. Size disappears while bid is still a tick away.
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Remove, Position = 0, Price = 21000.50, Volume = 0, Time = T0.AddMilliseconds(300) });
+        c.Update(book, T0.AddMilliseconds(400));
+        Assert.True(c.TryTakeResolved(out var r));
+        Assert.Equal(Outcome.Pulled, r.Outcome);
+        Assert.Equal(0L, r.Traded);            // no prints at the wall
+        Assert.True(r.Cancelled > r.Traded);   // all drop was cancellation
+    }
+
+    [Fact]
+    public void Consumed_when_price_breaks_through_with_trades()
+    {
+        var cfg = new RadarConfig();
+        var c = new EpisodeClassifier(cfg);
+        var book = BookAskWall(200);
+        c.OnApproach(Side.Ask, 21000.50, 200, T0);
+        // Trades eat the wall...
+        for (int i = 1; i <= 2; i++)
+            book.ApplyTrade(new TradeEvent { Price = 21000.50, Volume = 100, Time = T0.AddMilliseconds(i * 100) });
+        // ...wall removed AND price breaks above: new best ask is higher.
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Remove, Position = 0, Price = 21000.50, Volume = 0, Time = T0.AddMilliseconds(250) });
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 0, Price = 21000.75, Volume = 15, Time = T0.AddMilliseconds(250) });
+        c.Update(book, T0.AddMilliseconds(300));
+        Assert.True(c.TryTakeResolved(out var r));
+        Assert.Equal(Outcome.Consumed, r.Outcome);
+    }
+
+    [Fact]
+    public void OnApproach_is_idempotent_while_open()
+    {
+        var cfg = new RadarConfig();
+        var c = new EpisodeClassifier(cfg);
+        c.OnApproach(Side.Ask, 21000.50, 200, T0);
+        Assert.True(c.HasOpenEpisode(Side.Ask, 21000.50));
+        c.OnApproach(Side.Ask, 21000.50, 999, T0.AddMilliseconds(10)); // ignored
+        Assert.True(c.HasOpenEpisode(Side.Ask, 21000.50));
+    }
+
+    [Fact]
+    public void ErosionReads_flags_cancellation_without_trades_while_quote_away()
+    {
+        var c = new EpisodeClassifier(new RadarConfig());
+        var book = BookAskWall(200);                 // ask wall 200 @ 21000.50, bid 21000.25 (1 tick away)
+        c.OnApproach(Side.Ask, 21000.50, 200, T0);
+        // Wall thins 200 -> 140 with NO trades (pure cancellation), quote still a tick away.
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Update, Position = 0, Price = 21000.50, Volume = 140, Time = T0.AddMilliseconds(300) });
+        var reads = c.ErosionReads(book, T0.AddMilliseconds(400));
+        Assert.Single(reads);
+        Assert.Equal(60L, reads[0].Cancelled);
+        Assert.Equal(0L, reads[0].Traded);
+        Assert.True(reads[0].Approaching);
+        Assert.InRange(reads[0].Frac, 0.29, 0.31);   // 60 / 200
+    }
+
+    [Fact]
+    public void ErosionReads_does_not_flag_drop_explained_by_trades()
+    {
+        var c = new EpisodeClassifier(new RadarConfig());
+        var book = BookAskWall(200);
+        c.OnApproach(Side.Ask, 21000.50, 200, T0);
+        // 60 traded at the wall (buy aggressors), level shows 140 — drop is explained by trades.
+        book.ApplyTrade(new TradeEvent { Price = 21000.50, Volume = 60, Time = T0.AddMilliseconds(100) });
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Update, Position = 0, Price = 21000.50, Volume = 140, Time = T0.AddMilliseconds(150) });
+        var reads = c.ErosionReads(book, T0.AddMilliseconds(200));
+        Assert.Single(reads);
+        Assert.Equal(0L, reads[0].Cancelled);        // drop fully attributed to trading
+        Assert.Equal(0.0, reads[0].Frac);
+    }
+
+    [Fact]
+    public void Absorbed_bid_wall_when_sell_aggressors_explain_drop()
+    {
+        // Exercises ConsumingAggressor(Bid→Side.Bid), QuoteCrossed Bid branch, QuoteTicksAway Bid branch.
+        // If ConsumingAggressor(Bid) were inverted to Side.Ask, traded=0 → resolves PULLED → fails.
+        var cfg = new RadarConfig();
+        var c = new EpisodeClassifier(cfg);
+        var book = new BookMirror(0.25, TimeSpan.FromSeconds(30));
+        book.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 0, Price = 21000.25, Volume = 20, Time = T0 });
+        book.ApplyDepth(new DepthEvent { Side = Side.Bid, Op = DepthOp.Add, Position = 0, Price = 21000.00, Volume = 200, Time = T0 });
+        c.OnApproach(Side.Bid, 21000.00, 200, T0);
+        // Sell aggressors hit the bid wall (Last <= best bid → Side.Bid aggressor in BookMirror).
+        for (int i = 1; i <= 5; i++)
+            book.ApplyTrade(new TradeEvent { Price = 21000.00, Volume = 120, Time = T0.AddMilliseconds(i * 100) });
+        // Level refills; price holds at bid.
+        book.ApplyDepth(new DepthEvent { Side = Side.Bid, Op = DepthOp.Update, Position = 0, Price = 21000.00, Volume = 200, Time = T0.AddMilliseconds(600) });
+        c.Update(book, T0.AddMilliseconds(700));
+        c.Update(book, T0.AddSeconds(4)); // timeout resolves
+        Assert.True(c.TryTakeResolved(out var r));
+        Assert.Equal(Outcome.Absorbed, r.Outcome);
+        Assert.True(r.Traded >= 200);   // sell aggressors counted via ConsumingAggressor(Bid)
+        Assert.Equal(0L, r.Cancelled);
+    }
+}

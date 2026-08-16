@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- netstandard2.0 + C# 7.3 is NinjaTrader 8's compile envelope exactly (.NET
+         Framework 4.8 / Roslyn 7.3). Anything that builds here compiles in the
+         NinjaScript Editor, and these files ship as plain .cs into Custom/ —
+         never as a DLL reference. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>SizeMap.Engine</AssemblyName>
+    <RootNamespace>SizeMap.Engine</RootNamespace>
+  </PropertyGroup>
+</Project>
