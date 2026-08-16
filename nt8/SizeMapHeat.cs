@@ -408,7 +408,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// ROWS: ONE anchor per frame. A per-row GetYByValue returns int, so consecutive tick rows
 			// come out 13, 14, 13, 14 px and drift against NT8's own gridlines — that specific defect
 			// is why the platform's own depth map reads as smeared slabs.
-			float pxPerTick = cs.GetPixelsForDistance(_tick);
+			// NOT GetPixelsForDistance(_tick). It is typed float but returns a whole number of
+			// pixels — measured on this machine: 4.000 where the true height of a tick was 4.439,
+			// 5.000 where it was 4.590, 3.000 where it was 3.168. A sub-pixel residual per tick is
+			// invisible on one row and lethal across a panel, because the row map is one anchor plus
+			// a constant: the error accumulates linearly and put the heat up to 89 px (20 ticks)
+			// away from the candles at ordinary zooms. Every PROJ err reading matched that
+			// prediction to within a pixel.
+			//
+			// So measure the tick over the WHOLE visible range instead of asking for one tick.
+			// GetYByValue also returns int, but one pixel of quantisation spread over ~1050 is a
+			// 0.1% error rather than a 10% one.
+			double span   = cs.MaxValue - cs.MinValue;
+			int    yBot   = cs.GetYByValue(cs.MinValue);
+			int    yTop   = cs.GetYByValue(cs.MaxValue);
+			float pxPerTick = (span > 0 && yBot > yTop)
+				? (float)((yBot - yTop) * _tick / span)
+				: cs.GetPixelsForDistance(_tick);      // degenerate scale: fall back rather than divide by zero
 			if (pxPerTick <= 0) pxPerTick = 1f;
 			int   anchorRow = (int)Math.Round(cs.MinValue / _tick);
 			float anchorY   = cs.GetYByValue(anchorRow * _tick) - panelY;   // panel-local: the raster is blitted at (panelX, panelY)
