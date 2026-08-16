@@ -36,6 +36,40 @@ namespace SizeMap.Engine
         private List<DepthLevel> SideList(Side s) { return s == Side.Bid ? _bids : _asks; }
         private bool SamePrice(double a, double b) { return Math.Abs(a - b) < _tick / 2.0; }
 
+        /// Is this price inside the range the ladder can currently SEE on this side?
+        ///
+        /// This is the distinction that cost Phase 3 its answer. Every consumer asks the book for
+        /// the size at a price and gets 0 for anything absent — but 0 means two completely
+        /// different things: "this level emptied" and "this level is past the far end of a window
+        /// that only holds N levels". Measured on 5.8 M records of ES:
+        ///
+        ///   pos 0..9   Remove: 78,876 + 173 + ... , size 0 on 100.0% of them   -> genuinely gone
+        ///   pos 10     Remove: 79,188,              size > 0 on 100.0% of them -> scrolled out
+        ///
+        /// and pos 9 took 79,192 Adds against those 79,188 removals: one level in at the far end
+        /// pushes one out. That is the window sliding, not liquidity dying — and 89-92% of those
+        /// levels were back within one second holding >= 90% of the size they left with, a median
+        /// of 230 lots still resting. It is why `PULLED` fired once in 11,325 episodes: a wall
+        /// scrolling out is indistinguishable from a wall being cancelled unless you ask this.
+        ///
+        /// Derived from the ladder's own extent rather than from `pos == 10`, so it stays true when
+        /// the feed goes to 40 levels and the far end moves from ~2.25 points to ~10.
+        ///
+        /// ponytail: says nothing about a price the book has never quoted on this side — empty
+        /// ladder returns false. Ceiling — right after a reset everything reads out-of-window, which
+        /// is the honest answer while the book rebuilds.
+        public bool IsWithinWindow(Side side, double price)
+        {
+            var list = SideList(side);
+            if (list.Count == 0) return false;
+            double best = list[0].Price;
+            double far = list[list.Count - 1].Price;
+            double half = _tick / 2.0;
+            return side == Side.Bid
+                ? price <= best + half && price >= far - half
+                : price >= best - half && price <= far + half;
+        }
+
         public void ApplyDepth(DepthEvent e)
         {
             if (e.IsReset) { _bids.Clear(); _asks.Clear(); return; }
