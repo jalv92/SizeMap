@@ -70,7 +70,12 @@ n = d.get("meta", {}).get("files_compiled", "?")
 # references a partial-class member nt8c cannot reconstruct. Measured: 266 of these across
 # 129 files, including NinjaTrader's own @ADL.cs and @BarTimer.cs. Not ours, never was.
 errs = [e for e in errs if not (e.get("code") == "CS0103" and "'indicator'" in e.get("message",""))]
-mine = [e for e in errs if re.search(r'/(SizeMap[^/]*|Palette|ColumnRing|Rasterizer|RawRecord|Primitives|RadarConfig|BookMirror|WallDetector|WallTracker|LiquidityMemory|EpisodeClassifier|ConsumptionTracker|DepthBaseline|BigPrintTracker)\.cs$', e.get("file",""))]
+# OURS is a PATH test, not a name list. The list was hand-kept and already blind to the two
+# newest engine files: a deliberate syntax error in Chrome.cs compiled "0 errors in SizeMap
+# files" and the gate exited 0. A gate with a blind spot is worse than no gate, because it
+# is trusted.
+mine = [e for e in errs if "/Indicators/SizeMap/" in e.get("file","")
+        or re.search(r"/ChartStyles/SizeMap[^/]*\.cs$", e.get("file",""))]
 dup = [e for e in errs if e.get("code") == "CS0101"]
 print("files compiled: %s | errors total: %d | in SizeMap files: %d | CS0101: %d"
       % (n, len(errs), len(mine), len(dup)))

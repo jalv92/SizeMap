@@ -34,13 +34,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private DepthBaseline   _depthBase;
 		private ColumnRing      _ring;
 		private SizeMapRecorder _rec;
+		private WallTracker     _tracker;
+		private RadarConfig     _radarCfg;
 		private double          _tick = 0.25;
 		private double          _barMs;              // 0 = the bar type carries no time model
 
 		private DateTime _lastEngineRun   = DateTime.MinValue;
 		private DateTime _lastDepthSample = DateTime.MinValue;
+		private DateTime _lastWallRun     = DateTime.MinValue;
 
 		// Ported verbatim from RadarTab.cs 105-106. These three numbers ARE the replay handling.
+		// Must exceed the longest wall SizeMap will ever be asked to price. See the block at the
+		// BookMirror construction for the measurement that set it.
+		private static readonly TimeSpan TradeRetention = TimeSpan.FromSeconds(1500);
+
 		private const double EngineIntervalMs      = 50;      // ~20 Hz forward throttle
 		private const double ReplayResetBackwardMs = 2000;    // real rewinds jump seconds-minutes
 		private const double ReplayResetForwardMs  = 60000;   // bigger than any real quiet-tape gap
@@ -50,6 +57,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private int  _s0 = 8, _sCap = 320;      // the live ramp anchors, in lots
 		private int  _levelsSeen;               // max levels actually observed this session
 		private int  _epochs;                   // replay rewinds / feed discontinuities handled
+
+		// The wall snapshot, published exactly like the ring's index: the writer swaps a WHOLE
+		// immutable list under Volatile, the reader takes one Volatile.Read and never a lock.
+		// GetSnapshot already returns a fresh list per call, so there is nothing to copy and nothing
+		// the depth thread can mutate under the render thread's feet.
+		private System.Collections.Generic.IReadOnlyList<RadarNode> _nodes;
 
 		// ================= UI thread only =================
 		private readonly Palette   _palette = new Palette();
@@ -61,6 +74,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private bool   _zReissued;
 		private string _lastRefusal;
 		private double _emaMs;
+		private double _fps;
+		private long   _lastFrameStamp;
 		private int    _frame;
 		private const int HudEveryFrames = 20;  // ~5 s at NT8's 4 fps repaint cap
 
@@ -84,6 +99,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				MinutesOfHistory         = 30;
 				RecordRaw                = true;
+				ShowLegend               = true;
 			}
 			else if (State == State.DataLoaded)
 			{
@@ -92,8 +108,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// ring and the palette exist by the time the z-order is set.
 				_tick      = TickSize > 0 ? TickSize : 0.25;
 				_barMs     = BarMsOf(BarsPeriod);
-				_book      = new BookMirror(_tick, TimeSpan.FromSeconds(30));
+				// 30 s was two orders of magnitude shorter than the walls it measures. Measured on
+				// real ES tape: p50 wall age 394 s, and 88.6% / 91.1% / 93.7% of walls outlive a 30 s
+				// window. ConsumptionTracker counts trades from BookMirror's ring, so those trades were
+				// already pruned and the ledger reported "cancelled" for liquidity that was BOUGHT —
+				// a lie in the one number that is the entire product. Re-running the verdict at 1500 s
+				// moved mean TradeBackedFraction 0.678 -> 0.945 with ZERO outcome flips and identical
+				// episode boundaries, so the bias was pure and this removes it rather than trading it.
+				// Cost: ES runs ~42 trades/s, so 1500 s is ~63k trades in the ring, low single-digit MB.
+				_book      = new BookMirror(_tick, TradeRetention);
 				_depthBase = new DepthBaseline(4096);
+				// ponytail: RadarConfig's 24 thresholds are NQ PLACEHOLDERS and have never been
+				// validated out of sample — only TickSize is known true here. Ceiling — on ES the wall
+				// census will be wrong in one direction or the other, which is what the HUD's WALLS
+				// counter is for. Upgrade path — calibrate against the recorded corpus, then either
+				// change the defaults or expose the two that move (K_mult, MinAbsSize) as properties.
+				_radarCfg  = new RadarConfig { TickSize = _tick };
+				_tracker   = new WallTracker(_radarCfg);
 				_ring      = new ColumnRing(Math.Max(2, MinutesOfHistory * 60 * 1000 / ColumnRing.BucketMs), 48);
 				SeedFromSnapshot();
 
@@ -126,13 +157,20 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// e.Time, because in accelerated Playback market time and wall time are minutes apart and
 		// every window in this file is expressed in market time.
 		//
-		// Allocation: the per-event path allocates nothing. ONE call does — DepthBaseline.EndBatch,
-		// once per market-second, measured at 0.203 ms and 32 KB. At 1x that is invisible; at 500x
-		// Replay it is ~10% of a core and ~15 MB/s of Gen0 on a thread shared with every chart and
-		// DOM on this instrument. Said plainly here because "zero allocation" in a comment is what
-		// the next reader will trust.
-		// ponytail: left as is. Ceiling — high-speed Replay only. Upgrade path — a ring of reusable
-		// buffers in DepthBaseline, if a fast Replay ever stutters.
+		// Allocation: the per-EVENT path allocates nothing. The per-ENGINE-TICK path does, by more
+		// than this comment used to claim. Benchmarked against real ES depth, Release:
+		//
+		//   4 Hz (shipped)  0.085 ms/call   70 KB/call  ->  0.34 ms and 280 KB per market second
+		//   20 Hz           0.219 ms/call  204 KB/call  ->  4.38 ms and 4.07 MB per market second
+		//
+		// 5x the call rate costs 12.9x the CPU and 14.5x the garbage, so the 250 ms engine gate is
+		// LOAD-BEARING, not a nicety. The cost is WallTracker.Update: TemporalMedian allocates a
+		// List<long> and sorts it once per side AND once per level inside IsConfirmed -> Baseline,
+		// plus four HashSet/List per Update. At 500x Playback the shipped config is ~170 ms of CPU
+		// and ~140 MB/s of Gen0 per wall-clock second, inside _engineLock, on the shared instrument
+		// depth thread. Tight but survivable; at 20 Hz it would be 2.2 s of CPU per wall second.
+		// ponytail: left at 4 Hz. Ceiling — the gate is what makes it safe, so do not raise the rate.
+		// Upgrade path — reusable buffers in TemporalMedian/MedianOf before touching it.
 
 		protected override void OnMarketDepth(MarketDepthEventArgs e)
 		{
@@ -234,6 +272,26 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			_lastEngineRun = now;
 
+			// The wall engine, at the DATA QUANTUM (250 ms) rather than at the 20 Hz engine rate, and
+			// both halves of that are load-bearing.
+			//
+			// Honesty: a column is 250 ms. Promoting or killing a wall four times inside one column
+			// paints a state the picture cannot show, so the extra work buys nothing anyone can see.
+			//
+			// Cost: WallDetector.Baseline is a temporal median over BaselineWindow, and its sample
+			// count is (call rate x levels x window) — so the sort is O(rate log rate) per call and
+			// the total is QUADRATIC in the call rate. At 20 Hz over 30 s that is 6k samples sorted
+			// twice per call, 20 times a market second, on the instrument depth thread shared with
+			// every chart and DOM on this symbol; in 500x Playback that is market seconds arriving
+			// 500x faster than wall time. At 4 Hz it is 1.2k samples and ~0.4 ms per market second.
+			// Stalling the depth thread does not make SizeMap slow, it makes NinjaTrader slow.
+			if (_lastWallRun == DateTime.MinValue || (now - _lastWallRun).TotalMilliseconds >= ColumnRing.BucketMs)
+			{
+				_lastWallRun = now;
+				_tracker.Update(_book, now);
+				Volatile.Write(ref _nodes, _tracker.GetSnapshot(now));
+			}
+
 			// 1 Hz, NOT per engine run: at 20 Hz this resamples the same resting book 20x and just
 			// autocorrelates itself into a confident wrong percentile (ADR 2026-07-03).
 			if (_lastDepthSample == DateTime.MinValue || (now - _lastDepthSample).TotalSeconds >= 1.0)
@@ -254,11 +312,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 		// history it never saw.
 		private void HandleReplayReset(DateTime now)
 		{
-			_book = new BookMirror(_tick, TimeSpan.FromSeconds(30));
+			_book = new BookMirror(_tick, TradeRetention);
 			SeedFromSnapshot();
 			_depthBase.Reset();                 // rewound history must not inherit the old distribution
 			_lastDepthSample = DateTime.MinValue;
 			_ring.Reset(now.Ticks);             // publishes -1 first, so a mid-wipe reader draws nothing
+			// REBUILD, not OnReset(): OnReset only blinds the nodes, so a wall born before a rewind
+			// would keep being remembered — and drawn — over history it was never observed in.
+			_tracker = new WallTracker(_radarCfg);
+			_lastWallRun = DateTime.MinValue;
+			Volatile.Write(ref _nodes, null);
 			if (_rec != null) _rec.OnEpochBreak(now);   // close the file; never splice two tape epochs
 			Volatile.Write(ref _epochs, Volatile.Read(ref _epochs) + 1);
 			// No Print here: this runs on the depth thread and Print marshals to the UI dispatcher.
@@ -348,7 +411,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				string why = Refusal(chartControl, chartScale, pw, ph);
 				if (why != null) { Refuse(why); return; }
-				_lastRefusal = null;
+				if (_lastRefusal != null)
+				{
+					// Draw.TextFixed creates a PERSISTENT NinjaScript object. "no bars loaded" fires
+					// during every chart load, so without this the caption survives forever: a second
+					// post-blit primitive on every frame for the rest of the session, reading
+					// "SizeMap — no bars loaded" over a working heatmap.
+					try { RemoveDrawObject("SizeMapRefusal"); } catch { }
+					_lastRefusal = null;
+				}
 
 				long now = Volatile.Read(ref _nowTicks);
 				if (now == 0) return;                       // no depth yet: nothing to claim
@@ -364,7 +435,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RasterView view = BuildView(chartControl, chartScale, panelX, panelY, ph, now);
 				if (!EnsureBitmap(pw, ph)) return;
 
-				Rasterizer.Rasterize(_ring, _px, pw, ph, view, _palette);
+				System.Collections.Generic.IReadOnlyList<RadarNode> nodes = Volatile.Read(ref _nodes);
+				Rasterizer.Rasterize(_ring, _px, pw, ph, view, _palette, nodes);
+
+				// The HUD and the legend, written into the SAME int[] as the heat. Phase 1 could
+				// only Print them because there was no way to draw text without a DrawText call;
+				// the 5x7 font is what moved them onto the chart while leaving the post-blit
+				// primitive count at exactly one.
+				//
+				// Integer scale only. M22ToDevice is WPF's vertical device transform, so 1.0 at
+				// 100% and 1.5 at 150%; a 1-bit font scaled by 1.5 would need resampling, and
+				// resampled text over a field whose colours ARE the data is a grey lie.
+				int scale = chartControl.M22ToDevice >= 1.25 ? 2 : 1;
+				Chrome.DrawHud(_px, pw, ph, HudInfoOf(view, nodes), scale);
+				if (ShowLegend) Chrome.DrawLegend(_px, pw, ph, _palette, scale);
+
 				_bmp.CopyFromMemory(_px, pw * 4);
 
 				RenderTarget.AntialiasMode = SharpDX.Direct2D1.AntialiasMode.Aliased;
@@ -381,7 +466,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// int write into _px.
 
 				_sw.Stop();
-				Hud(pw, ph, view, _sw.Elapsed.TotalMilliseconds);
+				Hud(pw, ph, view, _sw.Elapsed.TotalMilliseconds, nodes);
 			}
 			catch (Exception ex)
 			{
@@ -475,7 +560,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			_projPxTick   = pxPerTick;
 			_projSpan     = cs.MaxValue - cs.MinValue;
 
-			return new RasterView(anchorRow, anchorY, pxPerTick, nowTicks, nowX, pxPerMs * ColumnRing.BucketMs);
+			return new RasterView(anchorRow, anchorY, pxPerTick, nowTicks, nowX, pxPerMs * ColumnRing.BucketMs, _tick);
 		}
 
 		private float  _projErr;      // our row map minus NT8's, in px, at 85% up the visible range
@@ -642,26 +727,97 @@ namespace NinjaTrader.NinjaScript.Indicators
 			_bmpW = _bmpH = 0;
 		}
 
-		// ---------------------------------------------------------------- the Phase 1 measurement
+		// ---------------------------------------------------------------- what the chart says
 		//
-		// Phase 1 exists to replace the estimate "~4.4 ms of a ~60 ms budget" with a number measured
-		// on Javier's own panel and his own tape. The raster HUD needs a bitmap font that does not
-		// exist yet, so it goes to Output — exactly as SizeMapProbe did, so the two are comparable.
-		private void Hud(int pw, int ph, RasterView v, double ms)
+		// One set of numbers, two readouts. The raster HUD and the Output line are built from the
+		// same helpers on purpose: two censuses that could disagree would make both untrustworthy,
+		// and the census is the only tuning instrument K_mult has.
+		private Chrome.HudInfo HudInfoOf(RasterView v, System.Collections.Generic.IReadOnlyList<RadarNode> nodes)
+		{
+			Chrome.HudInfo i = new Chrome.HudInfo();
+			i.Instrument = Instrument != null ? Instrument.FullName : null;
+			// NT8 exposes no "levels this feed was configured for", so DEPTH is left unset and the
+			// badge prints OBS alone. A configured number we cannot read is not a number we may
+			// print on the one line whose entire job is feed honesty.
+			i.DepthLevels = 0;
+			i.Observed = Volatile.Read(ref _levelsSeen);
+			i.ColumnMs = ColumnMsOf(v);
+			i.RowTicks = RowTicksOf(v);
+			i.S0 = Volatile.Read(ref _s0);
+			i.SCap = Volatile.Read(ref _sCap);
+			i.WallsKnown = nodes != null;
+			Census(nodes, out i.WallsLive, out i.WallsRemembered, out i.WallsFaint);
+			// LAST frame's EMA: this frame is still being drawn, so its own time does not exist yet.
+			// At 4 fps a 250 ms stale readout is the freshest honest one available.
+			i.FrameMs = _emaMs;
+			i.Fps = _fps;
+			return i;
+		}
+
+		// WALLS live / remembered / faint. K_mult IS the design, and this census is its only tuning
+		// instrument — spec §5.1's target band is 2-6 live and 10-25 remembered. A steady 0L is not
+		// "a quiet market", it is a threshold set for the wrong instrument.
+		private static void Census(System.Collections.Generic.IReadOnlyList<RadarNode> nodes,
+		                           out int live, out int mem, out int faint)
+		{
+			live = mem = faint = 0;
+			if (nodes == null) return;
+			for (int i = 0; i < nodes.Count; i++)
+			{
+				if (nodes[i].InWindow) { if (nodes[i].State == NodeState.Wall) live++; }
+				else if (nodes[i].Confidence >= 0.25) mem++;
+				else faint++;
+			}
+		}
+
+		// The honesty rule made mechanical: at 6 px bars a 250 ms bucket is 0.025 px, so 239 of 240
+		// buckets are invisible and one wins by rounding. Say what a column and a row actually are.
+		private static int ColumnMsOf(RasterView v)
+		{
+			return (int)(ColumnRing.BucketMs * Math.Max(1, Math.Ceiling(1.0 / v.PxPerBucket)));
+		}
+
+		private static int RowTicksOf(RasterView v)
+		{
+			return (int)Math.Max(1, Math.Ceiling(1.0 / v.PxPerTick));
+		}
+
+		//
+		// Phase 1 replaced the estimate "~4.4 ms of a ~60 ms budget" with a number measured on
+		// Javier's own panel and his own tape, and it went to the Output window because there was
+		// no way to draw text into the raster yet. The 5x7 font landed in Phase 2 and the same
+		// numbers are now ON the chart — but Print stays: the Output window is how a session gets
+		// reported, and it carries PROJ, the ring counters and the recorder state, which are
+		// diagnostics rather than HUD.
+		private void Hud(int pw, int ph, RasterView v, double ms,
+		                 System.Collections.Generic.IReadOnlyList<RadarNode> nodes)
 		{
 			_emaMs = _emaMs == 0 ? ms : _emaMs * 0.9 + ms * 0.1;
+
+			// Measured, not assumed. NT8 caps chart repaint at ~4 fps, but a chart that is being
+			// starved repaints slower and the HUD has to say so — a frame time of 1.4 ms at 0.8 fps
+			// is a very different picture from 1.4 ms at 4 fps.
+			long stamp = Stopwatch.GetTimestamp();
+			if (_lastFrameStamp != 0)
+			{
+				double dt = (stamp - _lastFrameStamp) / (double)Stopwatch.Frequency;
+				if (dt > 0.0005 && dt < 5.0)
+					_fps = _fps == 0 ? 1.0 / dt : _fps * 0.9 + (1.0 / dt) * 0.1;
+			}
+			_lastFrameStamp = stamp;
+
 			if (++_frame % HudEveryFrames != 0) return;
 
-			// The honesty rule made mechanical: at 6 px bars a 250 ms bucket is 0.025 px, so 239 of
-			// 240 buckets are invisible and one wins by rounding. Say what a column and a row
-			// actually are, every time.
-			int columnMs = (int)(ColumnRing.BucketMs * Math.Max(1, Math.Ceiling(1.0 / v.PxPerBucket)));
-			int rowTicks = (int)Math.Max(1, Math.Ceiling(1.0 / v.PxPerTick));
+			int wLive, wMem, wFaint;
+			Census(nodes, out wLive, out wMem, out wFaint);
+
+			int columnMs = ColumnMsOf(v);
+			int rowTicks = RowTicksOf(v);
 
 			Print(string.Format(
-				"SizeMapHeat {0}  {1:0.00}ms (ema {2:0.00})  panel {3}x{4}  col {5}ms  row {6}t  s0 {7} cap {8}  obs {9}L",
-				Instrument.MasterInstrument.Name, ms, _emaMs, pw, ph, columnMs, rowTicks,
-				Volatile.Read(ref _s0), Volatile.Read(ref _sCap), Volatile.Read(ref _levelsSeen)));
+				"SizeMapHeat {0}  {1:0.00}ms (ema {2:0.00}, {3:0.0}fps)  panel {4}x{5}  col {6}ms  row {7}t  s0 {8} cap {9}  obs {10}L  walls {11}L {12}R {13}F",
+				Instrument.MasterInstrument.Name, ms, _emaMs, _fps, pw, ph, columnMs, rowTicks,
+				Volatile.Read(ref _s0), Volatile.Read(ref _sCap), Volatile.Read(ref _levelsSeen), wLive, wMem, wFaint));
 
 			// PROJ is the row map grading itself against NinjaTrader. err is how far our y for a
 			// known price lands from where NT8 puts it, near the top of the visible range: ~0 means
@@ -687,13 +843,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		#region Properties
 		[NinjaScriptProperty]
-		[Range(1, 240)]
-		[Display(Name = "Minutes of history", Description = "Depth of the column ring. 30 min = 7200 columns ~= 2.9 MB.", Order = 1, GroupName = "SizeMap")]
+		// 390 = one RTH session (09:30-16:00), which is the number a trader actually asks for. The
+		// ring is 408 B per 250 ms column (24 B header + 48 cells x 8 B), so the dial is linear in
+		// memory: 30 min = 7200 col = 2.9 MB, 120 min = 28800 col = 11.7 MB, 390 min = 93600 col
+		// = 38.2 MB. Allocated once at DataLoaded and never touched again.
+		//
+		// Frame time is NOT linear in this dial. It is linear in how many columns the PANEL shows,
+		// which the rasterizer bounds explicitly. Measured on the harness, 1738x900 (the panel this
+		// was profiled on), 26 levels per column, p50 of 30 frames:
+		//
+		//              span 100s      span 30m       span 266m      span 390m
+		//   30 min     2.04 ms        6.06 ms        4.22 ms          -
+		//   120 min    2.21 ms        6.15 ms       13.66 ms          -
+		//   390 min    2.04 ms        6.34 ms       29.70 ms       41.89 ms (max 52.8)
+		//
+		// Read the top row: capacity is FREE at the zoom this instrument is for. It only costs when
+		// the chart is zoomed out far enough to put the whole ring on the panel, and then it is not
+		// waste — every one of those columns is drawn. Cost is ~0.45 us per on-panel column, so the
+		// real wall is the zoom: a whole session shown at once is ~42 ms of a ~60 ms budget, which
+		// is why 390 is the top of the range and not 1440.
+		[Range(1, 390)]
+		[Display(Name = "Minutes of history", Description = "Depth of the column ring. 30 min = 7200 columns ~= 2.9 MB; 390 min = one RTH session ~= 38 MB. Frame cost follows the zoom, not this dial.", Order = 1, GroupName = "SizeMap")]
 		public int MinutesOfHistory { get; set; }
 
 		[NinjaScriptProperty]
 		[Display(Name = "Record raw tape", Description = "Write the depth/tape corpus to Documents/NinjaTrader 8/SizeMap. Depth has no history — a day not recorded is a day that can never be calibrated against.", Order = 2, GroupName = "SizeMap")]
 		public bool RecordRaw { get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name = "Show legend", Description = "The 196x78 key in the bottom-right corner. It hides itself on a panel under 500x300 regardless.", Order = 3, GroupName = "SizeMap")]
+		public bool ShowLegend { get; set; }
 		#endregion
 	}
 }

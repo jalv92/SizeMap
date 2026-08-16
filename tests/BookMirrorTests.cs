@@ -19,7 +19,6 @@ public class BookMirrorTests
         var c = new RadarConfig();
         Assert.Equal(0.25, c.TickSize);
         Assert.Equal(4.0, c.K_mult);
-        Assert.Equal(25, c.MemoryBandTicks);
     }
 
     [Fact]

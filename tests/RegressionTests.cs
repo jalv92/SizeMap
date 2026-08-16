@@ -31,8 +31,10 @@ public class RegressionTests
         for (int i = 0; i <= cap; i++)
             ring.Accumulate(B0 + i * BT, 100, Side.Ask, 5);
 
-        // Now write something unmistakable into the OPEN head, at a row nothing else uses.
-        const int headRow = 140;
+        // ON PANEL. At 140 the sentinel projects to y = -8.5 and RowSpan rejects it before a
+        // pixel is written, so the assertion below could never fail — proven by mutation: revert
+        // the `cap - 1` bound and this test still passed. A test that cannot fail is not a test.
+        const int headRow = 110;
         ring.Accumulate(B0 + cap * BT, headRow, Side.Ask, 60000);
 
         var palette = new Palette();
@@ -42,7 +44,7 @@ public class RegressionTests
 
         // AnchorRow/AnchorY put row 100 mid-panel; PxPerBucket 0.5 keeps all 8 columns on screen.
         Rasterizer.Rasterize(ring, px, rows, rows,
-            new RasterView(100, rows / 2f, 1f, B0 + cap * BT, rows, 0.5f), palette);
+            new RasterView(100, rows / 2f, 1f, B0 + cap * BT, rows, 0.5f, 0.25), palette);
 
         uint headColour = palette.ColourOf(60000);
         foreach (int p in px)
@@ -65,7 +67,7 @@ public class RegressionTests
         palette.SetScale(8, 320);
         var px = new int[rows * rows];
         Rasterizer.Rasterize(ring, px, rows, rows,
-            new RasterView(100, rows / 2f, 1f, B0 + cap * BT, rows, 0.5f), palette);
+            new RasterView(100, rows / 2f, 1f, B0 + cap * BT, rows, 0.5f, 0.25), palette);
 
         uint published = palette.ColourOf(900);
         int hits = 0;

@@ -1,0 +1,197 @@
+{
+  "generated": "2026-08-16T10:26:06",
+  "tape": {
+    "file": "sm-raw-ES-20260813-part13.smr",
+    "instrument": "ES",
+    "tick": 0.25,
+    "from": "2026-08-13T09:30:00",
+    "to": "2026-08-13T10:51:39",
+    "minutes": 81.66533333333334,
+    "records": 1846741,
+    "depth": 1639587,
+    "trades": 207073
+  },
+  "config": {
+    "hz": 20,
+    "k_mult": 4,
+    "min_abs_size": 40,
+    "trade_retention_sec": 30
+  },
+  "fidelity": {
+    "ok": 84,
+    "mismatched": 0,
+    "same_tick_excluded": 0,
+    "no_node": 0
+  },
+  "q1_plausibility": {
+    "walls_detected": 9,
+    "walls_dead": 9,
+    "lifetime_p50_sec": 501.964,
+    "lifetime_p90_sec": 759.3688,
+    "peak_p50": 524,
+    "census_live_mean": 0.2638888888888889,
+    "census_remembered_mean": 0.7011820330969267,
+    "census_live_mean_band25": 0.2638888888888889,
+    "census_remembered_mean_band25": 0.6424940898345154,
+    "episodes": 134,
+    "split": {
+      "absorbed": 8,
+      "pulled": 0,
+      "consumed": 76,
+      "unclassified": 50
+    }
+  },
+  "q2_null_model": {
+    "confusion": [
+      {
+        "classifier": "ABSORBED",
+        "absorbed": 8,
+        "pulled": 0,
+        "consumed": 0
+      },
+      {
+        "classifier": "PULLED",
+        "absorbed": 0,
+        "pulled": 0,
+        "consumed": 0
+      },
+      {
+        "classifier": "CONSUMED",
+        "absorbed": 34,
+        "pulled": 0,
+        "consumed": 42
+      },
+      {
+        "classifier": "UNCLASSIFIED",
+        "absorbed": 43,
+        "pulled": 0,
+        "consumed": 7
+      }
+    ],
+    "classified": 84,
+    "agree": 50,
+    "agreement_rate": 0.5952380952380952
+  },
+  "q3_forward": [
+    {
+      "outcome": "ABSORBED",
+      "n": 8,
+      "p_through_t0": 0,
+      "horizons": {
+        "10s": {
+          "n": 8,
+          "p_through": 0.375,
+          "mean_move_ticks": 0,
+          "median_move_ticks": -0.5
+        },
+        "30s": {
+          "n": 8,
+          "p_through": 0.125,
+          "mean_move_ticks": -1.75,
+          "median_move_ticks": -2.5
+        },
+        "60s": {
+          "n": 8,
+          "p_through": 0.125,
+          "mean_move_ticks": -4.625,
+          "median_move_ticks": -6
+        }
+      }
+    },
+    {
+      "outcome": "PULLED",
+      "n": 0,
+      "p_through_t0": null,
+      "horizons": {
+        "10s": {
+          "n": 0,
+          "p_through": null,
+          "mean_move_ticks": null,
+          "median_move_ticks": null
+        },
+        "30s": {
+          "n": 0,
+          "p_through": null,
+          "mean_move_ticks": null,
+          "median_move_ticks": null
+        },
+        "60s": {
+          "n": 0,
+          "p_through": null,
+          "mean_move_ticks": null,
+          "median_move_ticks": null
+        }
+      }
+    },
+    {
+      "outcome": "CONSUMED",
+      "n": 76,
+      "p_through_t0": 0.9078947368421053,
+      "horizons": {
+        "10s": {
+          "n": 76,
+          "p_through": 0.6973684210526315,
+          "mean_move_ticks": 0.8092105263157895,
+          "median_move_ticks": 1
+        },
+        "30s": {
+          "n": 76,
+          "p_through": 0.631578947368421,
+          "mean_move_ticks": 2.0723684210526314,
+          "median_move_ticks": 1
+        },
+        "60s": {
+          "n": 76,
+          "p_through": 0.631578947368421,
+          "mean_move_ticks": 3.625,
+          "median_move_ticks": 1
+        }
+      }
+    },
+    {
+      "outcome": "UNCLASSIFIED",
+      "n": 50,
+      "p_through_t0": 0,
+      "horizons": {
+        "10s": {
+          "n": 50,
+          "p_through": 0.32,
+          "mean_move_ticks": -0.23,
+          "median_move_ticks": 0
+        },
+        "30s": {
+          "n": 50,
+          "p_through": 0.34,
+          "mean_move_ticks": -0.29,
+          "median_move_ticks": 0
+        },
+        "60s": {
+          "n": 50,
+          "p_through": 0.4,
+          "mean_move_ticks": -0.33,
+          "median_move_ticks": 0
+        }
+      }
+    }
+  ],
+  "q3_drift_control_ticks": {
+    "h10": 0.2728457210541901,
+    "h30": 0.848605577689243,
+    "h60": 1.698055638647921,
+    "census_samples": 16919
+  },
+  "q4_ledger": {
+    "wall_age_p50_sec": 228.574,
+    "wall_age_max_sec": 457.728,
+    "walls_older_than_retention": 119,
+    "episodes_with_trade_and_cancel": 47,
+    "retention_experiment": {
+      "raised_to_sec": 1500,
+      "matched": 134,
+      "outcome_flips": 0,
+      "glyph_flips": 74,
+      "tbf_mean_before": 0.46295712335916067,
+      "tbf_mean_after": 0.8798390280990217
+    }
+  }
+}

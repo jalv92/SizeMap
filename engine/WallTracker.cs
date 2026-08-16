@@ -12,8 +12,10 @@ namespace SizeMap.Engine
         private readonly WallDetector _detector;
         private readonly EpisodeClassifier _classifier;
         private readonly LiquidityMemory _memory;
-        private double _lastBestBid;
-        private double _lastBestAsk;
+        // Outcomes resolved by the LAST Update call. Without this the classifier's verdicts are
+        // consumed by memory and can never be counted from outside, so "does this beat a naive
+        // rule on real tape" stays unanswerable — which is how a moat gets rendered, never validated.
+        private readonly List<EpisodeResult> _lastResolved = new List<EpisodeResult>();
 
         public WallTracker(RadarConfig cfg)
         {
@@ -26,12 +28,6 @@ namespace SizeMap.Engine
         public void Update(BookMirror book, DateTime now)
         {
             _detector.Update(book, now);
-
-            DepthLevel bb, ba;
-            bool hasBid = book.TryBestBid(out bb);
-            bool hasAsk = book.TryBestAsk(out ba);
-            _lastBestBid = hasBid ? bb.Price : 0;
-            _lastBestAsk = hasAsk ? ba.Price : 0;
 
             // 1) Promote / observe confirmed walls; track which prices are currently visible.
             var visible = new HashSet<long>();
@@ -47,8 +43,9 @@ namespace SizeMap.Engine
 
             // 4) Advance & resolve episodes -> feed outcomes to memory.
             _classifier.Update(book, now);
+            _lastResolved.Clear();
             EpisodeResult r;
-            while (_classifier.TryTakeResolved(out r)) _memory.ApplyOutcome(r, now);
+            while (_classifier.TryTakeResolved(out r)) { _lastResolved.Add(r); _memory.ApplyOutcome(r, now); }
 
             // 5) Eviction.
             _memory.Evict(now);
@@ -123,9 +120,12 @@ namespace SizeMap.Engine
             return _classifier.ErosionReads(book, now);
         }
 
+        // Valid until the next Update. Read-only: memory has already applied these.
+        public IReadOnlyList<EpisodeResult> ResolvedThisUpdate { get { return _lastResolved; } }
+
         public IReadOnlyList<RadarNode> GetSnapshot(DateTime now)
         {
-            return _memory.Snapshot(_lastBestBid, _lastBestAsk, now);
+            return _memory.Snapshot(now);
         }
 
         // Round-6: a node that just went blind (slid outside the MBP-10 window / momentarily unobserved)
@@ -136,13 +136,6 @@ namespace SizeMap.Engine
         public static long TrustedSize(bool inWindow, double ageSeconds, long lastKnownSize, double blindTrustSeconds)
         {
             return (inWindow || ageSeconds < blindTrustSeconds) ? lastKnownSize : 0;
-        }
-
-        // Test seam: lets a test supply the mid explicitly so the band filter is centred on the
-        // node being observed rather than on the gap quote cached by the last Update call.
-        public IReadOnlyList<RadarNode> GetSnapshot(double bestBid, double bestAsk, DateTime now)
-        {
-            return _memory.Snapshot(bestBid, bestAsk, now);
         }
 
         private long Key(Side s, double price) { return ((long)Math.Round(price / _tick)) * 2 + (s == Side.Ask ? 1 : 0); }

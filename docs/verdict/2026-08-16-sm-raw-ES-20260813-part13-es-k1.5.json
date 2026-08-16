@@ -1,0 +1,197 @@
+{
+  "generated": "2026-08-16T10:25:29",
+  "tape": {
+    "file": "sm-raw-ES-20260813-part13.smr",
+    "instrument": "ES",
+    "tick": 0.25,
+    "from": "2026-08-13T09:30:00",
+    "to": "2026-08-13T10:51:39",
+    "minutes": 81.66533333333334,
+    "records": 1846741,
+    "depth": 1639587,
+    "trades": 207073
+  },
+  "config": {
+    "hz": 20,
+    "k_mult": 1.5,
+    "min_abs_size": 40,
+    "trade_retention_sec": 30
+  },
+  "fidelity": {
+    "ok": 1263,
+    "mismatched": 0,
+    "same_tick_excluded": 0,
+    "no_node": 0
+  },
+  "q1_plausibility": {
+    "walls_detected": 131,
+    "walls_dead": 127,
+    "lifetime_p50_sec": 488.372,
+    "lifetime_p90_sec": 857.564,
+    "peak_p50": 121,
+    "census_live_mean": 4.235579196217494,
+    "census_remembered_mean": 11.034692671394799,
+    "census_live_mean_band25": 4.235579196217494,
+    "census_remembered_mean_band25": 8.758628841607566,
+    "episodes": 1893,
+    "split": {
+      "absorbed": 115,
+      "pulled": 0,
+      "consumed": 1148,
+      "unclassified": 630
+    }
+  },
+  "q2_null_model": {
+    "confusion": [
+      {
+        "classifier": "ABSORBED",
+        "absorbed": 115,
+        "pulled": 0,
+        "consumed": 0
+      },
+      {
+        "classifier": "PULLED",
+        "absorbed": 0,
+        "pulled": 0,
+        "consumed": 0
+      },
+      {
+        "classifier": "CONSUMED",
+        "absorbed": 499,
+        "pulled": 0,
+        "consumed": 649
+      },
+      {
+        "classifier": "UNCLASSIFIED",
+        "absorbed": 559,
+        "pulled": 0,
+        "consumed": 71
+      }
+    ],
+    "classified": 1263,
+    "agree": 764,
+    "agreement_rate": 0.6049089469517023
+  },
+  "q3_forward": [
+    {
+      "outcome": "ABSORBED",
+      "n": 115,
+      "p_through_t0": 0,
+      "horizons": {
+        "10s": {
+          "n": 115,
+          "p_through": 0.33043478260869563,
+          "mean_move_ticks": -0.07391304347826087,
+          "median_move_ticks": 0
+        },
+        "30s": {
+          "n": 115,
+          "p_through": 0.4608695652173913,
+          "mean_move_ticks": 0.3869565217391304,
+          "median_move_ticks": 1
+        },
+        "60s": {
+          "n": 114,
+          "p_through": 0.39473684210526316,
+          "mean_move_ticks": 0.20614035087719298,
+          "median_move_ticks": 0
+        }
+      }
+    },
+    {
+      "outcome": "PULLED",
+      "n": 0,
+      "p_through_t0": null,
+      "horizons": {
+        "10s": {
+          "n": 0,
+          "p_through": null,
+          "mean_move_ticks": null,
+          "median_move_ticks": null
+        },
+        "30s": {
+          "n": 0,
+          "p_through": null,
+          "mean_move_ticks": null,
+          "median_move_ticks": null
+        },
+        "60s": {
+          "n": 0,
+          "p_through": null,
+          "mean_move_ticks": null,
+          "median_move_ticks": null
+        }
+      }
+    },
+    {
+      "outcome": "CONSUMED",
+      "n": 1148,
+      "p_through_t0": 0.9155052264808362,
+      "horizons": {
+        "10s": {
+          "n": 1148,
+          "p_through": 0.5722996515679443,
+          "mean_move_ticks": 0.03484320557491289,
+          "median_move_ticks": 0
+        },
+        "30s": {
+          "n": 1142,
+          "p_through": 0.574430823117338,
+          "mean_move_ticks": 0.7219789842381786,
+          "median_move_ticks": 0
+        },
+        "60s": {
+          "n": 1142,
+          "p_through": 0.5472854640980735,
+          "mean_move_ticks": 1.4877408056042032,
+          "median_move_ticks": 1
+        }
+      }
+    },
+    {
+      "outcome": "UNCLASSIFIED",
+      "n": 630,
+      "p_through_t0": 0,
+      "horizons": {
+        "10s": {
+          "n": 630,
+          "p_through": 0.30793650793650795,
+          "mean_move_ticks": 0.1253968253968254,
+          "median_move_ticks": 0
+        },
+        "30s": {
+          "n": 630,
+          "p_through": 0.373015873015873,
+          "mean_move_ticks": 0.32301587301587303,
+          "median_move_ticks": 0
+        },
+        "60s": {
+          "n": 628,
+          "p_through": 0.4140127388535032,
+          "mean_move_ticks": 0.33678343949044587,
+          "median_move_ticks": 0
+        }
+      }
+    }
+  ],
+  "q3_drift_control_ticks": {
+    "h10": 0.2728457210541901,
+    "h30": 0.848605577689243,
+    "h60": 1.698055638647921,
+    "census_samples": 16919
+  },
+  "q4_ledger": {
+    "wall_age_p50_sec": 187.416,
+    "wall_age_max_sec": 1002.352,
+    "walls_older_than_retention": 1678,
+    "episodes_with_trade_and_cancel": 705,
+    "retention_experiment": {
+      "raised_to_sec": 1500,
+      "matched": 1893,
+      "outcome_flips": 0,
+      "glyph_flips": 517,
+      "tbf_mean_before": 0.7911424207129819,
+      "tbf_mean_after": 0.9590213751796124
+    }
+  }
+}

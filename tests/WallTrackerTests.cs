@@ -132,8 +132,7 @@ public class WallTrackerTests
     [Fact]
     public void Price_gap_beyond_band_blinds_tracked_node()
     {
-        // Use a narrow band (5 ticks = 1.25 pts) so a 14-tick gap is unambiguously outside it.
-        var cfg = new RadarConfig { MemoryBandTicks = 5, TickSize = 0.25 };
+        var cfg = new RadarConfig { TickSize = 0.25 };
         var wt = new WallTracker(cfg);
         var book = NewBook();
         AddBidWallBook(book, 500, T0);
@@ -148,8 +147,7 @@ public class WallTrackerTests
         gapBook.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = 0, Price = 21003.25, Volume = 15, Time = tGap });
         wt.Update(gapBook, tGap);
 
-        // Query with the OLD mid so the band includes 20999.50 (0.625 pts < band 1.25 pts).
-        var node = wt.GetSnapshot(21000.00, 21000.25, tGap)
+        var node = wt.GetSnapshot(tGap)
             .FirstOrDefault(n => Math.Abs(n.Price - 20999.50) < 0.01);
         Assert.False(node.InWindow, "Node must be blinded after a gap > MemoryBandTicks");
         Assert.Equal(NodeState.Remembered, node.State);

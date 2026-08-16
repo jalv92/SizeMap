@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <RootNamespace>SizeMap.Verdict</RootNamespace>
+    <AssemblyName>SizeMap.Verdict</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Same reference the harness uses, for the same reason: the numbers in the report have to
+         come from the files the indicator ships, not from a re-implementation that agrees. -->
+    <ProjectReference Include="..\engine\SizeMap.Engine.csproj" />
+  </ItemGroup>
+</Project>

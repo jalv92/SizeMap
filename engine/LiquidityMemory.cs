@@ -139,15 +139,17 @@ namespace SizeMap.Engine
             return list;
         }
 
-        public IReadOnlyList<RadarNode> Snapshot(double bestBid, double bestAsk, DateTime now)
+        // No band filter. It used to hard-clip to MemoryBandTicks (25) around mid, which is ~6 price
+        // points on NQ — a fraction of what a chart pane shows vertically. Remembered walls above and
+        // below that band vanished from the snapshot while still being on screen, and a wall that
+        // silently stops being drawn reads as a rendering bug, not as a policy. Clipping is the
+        // rasterizer's job: it is the only layer that knows the pixels. Node count is already bounded
+        // by Evict() and P_max, and only confirmed walls are ever promoted.
+        public IReadOnlyList<RadarNode> Snapshot(DateTime now)
         {
-            double mid = (bestBid > 0 && bestAsk > 0) ? (bestBid + bestAsk) / 2.0
-                       : (bestBid > 0 ? bestBid : bestAsk);
-            double band = _cfg.MemoryBandTicks * _tick;
             var outList = new List<RadarNode>();
             foreach (var n in _nodes.Values)
             {
-                if (mid > 0 && Math.Abs(n.Price - mid) > band + _tick / 2.0) continue;
                 outList.Add(new RadarNode
                 {
                     Price = n.Price,
@@ -158,7 +160,8 @@ namespace SizeMap.Engine
                     RawState = n.State,   // additive: UNMASKED true state, so React can see the latched wall's real resolution through a blink (masked State above unchanged for Break/cockpit)
                     Confidence = DecayedConfidence(n, now),
                     InWindow = n.InWindow,
-                    AgeSeconds = (now - n.LastSeen).TotalSeconds
+                    AgeSeconds = (now - n.LastSeen).TotalSeconds,
+                    FirstSeenTicks = n.FirstSeen.Ticks
                 });
             }
             return outList;

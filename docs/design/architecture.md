@@ -343,6 +343,13 @@ Alpha rises with magnitude (0x50 → 0xD8) so cold liquidity lets candles throug
 
 ### The categorical layer — NOT in the raster
 
+> **SUPERSEDED by `visual-spec.md` §3 and §4, and by the shipped `Rasterizer.DrawWalls`.** This section
+> predates the visual spec and is kept only for the argument it makes (remembered liquidity is a
+> different MARK, not the ramp at lower alpha — that part survived and is the whole thesis of the wall
+> layer). Everything below about Direct2D primitives after the blit is wrong now: the post-blit
+> primitive count is exactly **1**, so the wall bands are written into the same `int[]` as the heat.
+> The colours and forms below are also superseded — read the grammar table in `visual-spec.md` §4.
+
 Remembered liquidity is **not** the ramp at lower alpha. That is the rejection criterion. Remembered walls are discrete objects drawn as Direct2D primitives after the blit, in a hue family the ramp never visits:
 
 | Layer | hex | `0xAARRGGBB` | Form |

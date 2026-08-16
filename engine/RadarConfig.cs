@@ -37,8 +37,9 @@ namespace SizeMap.Engine
         public double C_floor = 0.05;
         public TimeSpan T_evict = TimeSpan.FromSeconds(300);
 
-        // Visible band
-        public int MemoryBandTicks = 25;
+        // No MemoryBandTicks. It hard-clipped LiquidityMemory.Snapshot to +/-25 ticks of mid — far
+        // narrower than a chart pane — so remembered walls disappeared while still on screen. The
+        // rasterizer clips by pixel, which is the only place that knows what is visible.
 
         // VolGovernor regime multiplier applied to time windows (×0.3..1.0); 1.0 = calm.
         public double VolGovernor = 1.0;

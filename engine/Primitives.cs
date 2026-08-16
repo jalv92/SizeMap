@@ -55,5 +55,9 @@ namespace SizeMap.Engine
         public double Confidence;  // 0..1
         public bool InWindow;      // within the live 10 levels
         public double AgeSeconds;  // since lastSeen
+        // Market DateTime.Ticks of promotion. The band's LEFT edge on the chart: a wall is drawn
+        // from its birth column to now, and a projection rebuilt from scratch every frame has no
+        // way to recover a birth it was never told about.
+        public long FirstSeenTicks;
     }
 }

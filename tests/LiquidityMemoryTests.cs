@@ -15,7 +15,7 @@ public class LiquidityMemoryTests
     {
         var m = new LiquidityMemory(new RadarConfig());
         m.Promote(Side.Bid, 21000.00, size: 500, baseline: 11, now: T0); // size/B=45.5, K=4 -> 0.4+0.1*41.5 clamps to 0.8
-        var s = m.Snapshot(21000.00, 21000.25, T0);
+        var s = m.Snapshot(T0);
         var n = NodeAt(s, 21000.00);
         Assert.Equal(NodeState.Wall, n.State);
         Assert.Equal(0.8, n.Confidence, 3); // size/B=45.5 → 0.4+0.1*41.5 clamps to ceiling
@@ -30,7 +30,7 @@ public class LiquidityMemoryTests
         var m = new LiquidityMemory(cfg);
         m.Promote(Side.Bid, 21000.00, 500, 11, T0); // C0 = 0.8
         m.MarkBlind(Side.Bid, 21000.00);
-        var s = m.Snapshot(21000.00, 21000.25, T0.AddSeconds(30)); // one half-life
+        var s = m.Snapshot(T0.AddSeconds(30)); // one half-life
         var n = NodeAt(s, 21000.00);
         Assert.False(n.InWindow);
         Assert.Equal(NodeState.Remembered, n.State);
@@ -43,15 +43,15 @@ public class LiquidityMemoryTests
     {
         var m = new LiquidityMemory(new RadarConfig());
         m.Promote(Side.Bid, 21000.00, 500, 11, T0); // C0 ~0.8, InWindow=true
-        double c0 = NodeAt(m.Snapshot(21000.00, 21000.25, T0), 21000.00).Confidence;
+        double c0 = NodeAt(m.Snapshot(T0), 21000.00).Confidence;
 
         // 300s later, still InWindow, NO ObserveLive/MarkBlind in between.
-        double cLive = NodeAt(m.Snapshot(21000.00, 21000.25, T0.AddSeconds(300)), 21000.00).Confidence;
+        double cLive = NodeAt(m.Snapshot(T0.AddSeconds(300)), 21000.00).Confidence;
         Assert.Equal(c0, cLive); // live confidence never decays regardless of elapsed time
 
         // Contrast: once blind, the SAME elapsed time DOES decay it (proves the decay path is live).
         m.MarkBlind(Side.Bid, 21000.00);
-        double cBlind = NodeAt(m.Snapshot(21000.00, 21000.25, T0.AddSeconds(300)), 21000.00).Confidence;
+        double cBlind = NodeAt(m.Snapshot(T0.AddSeconds(300)), 21000.00).Confidence;
         Assert.True(cBlind < c0);
     }
 
@@ -61,9 +61,9 @@ public class LiquidityMemoryTests
         var cfg = new RadarConfig();
         var m = new LiquidityMemory(cfg);
         m.Promote(Side.Ask, 21000.50, 200, 20, T0); // C0 ~ 0.4+0.1*(10-4)=clamp .8
-        double before = NodeAt(m.Snapshot(21000.25, 21000.50, T0), 21000.50).Confidence;
+        double before = NodeAt(m.Snapshot(T0), 21000.50).Confidence;
         m.ApplyOutcome(new EpisodeResult { Side = Side.Ask, Price = 21000.50, Outcome = Outcome.Absorbed, Traded = 600, Cancelled = 0, ResolvedAt = T0.AddSeconds(1) }, T0.AddSeconds(1));
-        var n = NodeAt(m.Snapshot(21000.25, 21000.50, T0.AddSeconds(1)), 21000.50);
+        var n = NodeAt(m.Snapshot(T0.AddSeconds(1)), 21000.50);
         Assert.Equal(NodeState.Absorbed, n.State);
         Assert.True(n.Confidence > before); // dC_absorb is strictly positive
     }
@@ -75,7 +75,7 @@ public class LiquidityMemoryTests
         var m = new LiquidityMemory(cfg);
         m.Promote(Side.Ask, 21000.50, 200, 20, T0);
         m.ApplyOutcome(new EpisodeResult { Side = Side.Ask, Price = 21000.50, Outcome = Outcome.Pulled, Traded = 0, Cancelled = 200, ResolvedAt = T0.AddSeconds(1) }, T0.AddSeconds(1));
-        var n = NodeAt(m.Snapshot(21000.25, 21000.50, T0.AddSeconds(1)), 21000.50);
+        var n = NodeAt(m.Snapshot(T0.AddSeconds(1)), 21000.50);
         Assert.Equal(NodeState.Pulled, n.State);
         Assert.True(n.Confidence < 0.4);
     }
@@ -103,23 +103,28 @@ public class LiquidityMemoryTests
         m.Promote(Side.Ask, 21000.50, 200, 20, T0);                                     // State=Wall, InWindow=true
         m.ApplyOutcome(new EpisodeResult { Side = Side.Ask, Price = 21000.50, Outcome = Outcome.Absorbed, ResolvedAt = T0 }, T0); // true State -> Absorbed
         m.MarkBlind(Side.Ask, 21000.50);                                                // InWindow=false
-        var n = NodeAt(m.Snapshot(21000.25, 21000.50, T0.AddSeconds(1)), 21000.50);
+        var n = NodeAt(m.Snapshot(T0.AddSeconds(1)), 21000.50);
         Assert.False(n.InWindow);
         Assert.Equal(NodeState.Remembered, n.State);   // masked (unchanged): Break/cockpit see Remembered when blind
         Assert.Equal(NodeState.Absorbed, n.RawState);  // additive: React sees the latched wall's real resolution through the blink
     }
 
+    // The inverse of the test this replaces. Snapshot used to hard-clip to MemoryBandTicks (25),
+    // ~6 price points on NQ — far less than a chart pane spans vertically — so a remembered wall
+    // 40 ticks from mid vanished from the snapshot while still being on screen, and a band that
+    // stops being drawn for no visible reason reads as a rendering bug. Clipping belongs to the
+    // rasterizer, which is the only layer that knows the pixels.
     [Fact]
-    public void Snapshot_excludes_nodes_outside_the_memory_band()
+    public void Snapshot_keeps_a_node_far_from_mid()
     {
-        var cfg = new RadarConfig { MemoryBandTicks = 25, TickSize = 0.25 }; // band = 6.25 price units
+        var cfg = new RadarConfig { TickSize = 0.25 };
         var m = new LiquidityMemory(cfg);
-        m.Promote(Side.Bid, 21000.00, 500, 11, T0);   // inside band
+        m.Promote(Side.Bid, 21000.00, 500, 11, T0);
         m.MarkBlind(Side.Bid, 21000.00);
-        m.Promote(Side.Bid, 20990.00, 500, 11, T0);   // 40 ticks away -> outside
+        m.Promote(Side.Bid, 20990.00, 500, 11, T0);   // 40 ticks away
         m.MarkBlind(Side.Bid, 20990.00);
-        var s = m.Snapshot(21000.00, 21000.25, T0);
+        var s = m.Snapshot(T0);
         Assert.Contains(s, n => Math.Abs(n.Price - 21000.00) < 0.01);
-        Assert.DoesNotContain(s, n => Math.Abs(n.Price - 20990.00) < 0.01);
+        Assert.Contains(s, n => Math.Abs(n.Price - 20990.00) < 0.01);
     }
 }

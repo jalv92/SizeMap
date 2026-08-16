@@ -274,7 +274,7 @@ Cut from v1 (§0 #6). When built:
 
 ## 5. THE HUD AND LEGEND
 
-**Font:** hand-authored **5×7 1-bit bitmap**, charset `0-9 A-Z . · % ! -`, 1 px letter spacing (advance 6 px), 9 px line height. Scale is an **integer**: ×1 when `chartControl.M22ToDevice < 1.25`, ×2 at or above. Integer scaling of a 1-bit font stays pixel-crisp; that is the whole DPI story.
+**Font:** hand-authored **5×7 1-bit bitmap**, charset `0-9 A-Z . · % ! - : / =` (`:` `/` for clock and file tokens; `=` because this section's own `X2 = 42 IDX` needs it — unknown characters render blank, so the first build of the legend had a hole where the `=` was), 1 px letter spacing (advance 6 px), 9 px line height. Scale is an **integer**: ×1 when `chartControl.M22ToDevice < 1.25`, ×2 at or above. Integer scaling of a 1-bit font stays pixel-crisp; that is the whole DPI story.
 
 ### 5.1 HUD — top-left of the plot rect, `(px+6, py+6)`, two lines
 

@@ -34,7 +34,14 @@ namespace SizeMap.Harness
   --s0 <n>           ramp foot, robust p50 size     (default 8)
   --cap <n>          ramp ceiling size              (default 320)
   --bg <RRGGBB>      chart background               (default 1F1F1F, the measured NT8 dark)
-  --bench <n>        rasterize n times and report   (default 20)";
+  --no-chrome        skip the HUD and legend        (default: draw them, as NT8 does)
+  --scale <1|2>      text scale; the indicator picks it from M22ToDevice (default 1)
+  --kmult <x>        with --in: wall gate, size / baseline   (default 4, an NQ placeholder)
+  --minsize <n>      with --in: wall gate, absolute lots      (default 40, ditto)
+  --bench <n>        rasterize n times and report   (default 20)
+  --minutes <n>      ring CAPACITY in minutes, and fill it right around. Independent of
+                     --span, which is what the panel SHOWS. This is the pair that proves
+                     frame time is bound by the panel and not by how much history is held.";
 
         static int Main(string[] argv)
         {
@@ -45,7 +52,9 @@ namespace SizeMap.Harness
 
             // cellsPerColumn has to hold both sides plus the walls that sit outside the quoted
             // window, or the ring starts evicting the very levels this exists to show.
-            ColumnRing ring = new ColumnRing(7200, Math.Max(48, o.Levels * 2 + 16));
+            int capacity = o.Minutes > 0 ? Math.Max(2, o.Minutes * 60 * 1000 / ColumnRing.BucketMs) : 7200;
+            if (o.Minutes > 0) o.FillColumns = capacity;   // wrap the ring right around: the live steady state
+            ColumnRing ring = new ColumnRing(capacity, Math.Max(48, o.Levels * 2 + 16));
             Scene sc = o.In != null ? Tape.Replay(o.In, ring, o) : Synthetic.Build(ring, o);
 
             Palette pal = new Palette();
@@ -55,34 +64,121 @@ namespace SizeMap.Harness
             float pxPerBucket = (float)(o.Width / (o.SpanSeconds * 1000.0 / ColumnRing.BucketMs));
             RasterView view = new RasterView(
                 sc.AnchorRow, o.Height / 2f, o.Height / (float)o.Ticks,
-                sc.NowTicks, o.Width, pxPerBucket);
+                sc.NowTicks, o.Width, pxPerBucket, 0.25);
 
             int[] px = new int[o.Width * o.Height];
-            Rasterizer.Rasterize(ring, px, o.Width, o.Height, view, pal);   // JIT warm-up, discarded
+            int visited = Rasterizer.Rasterize(ring, px, o.Width, o.Height, view, pal, sc.Nodes);   // JIT warm-up, discarded
 
             double[] ms = new double[o.Bench];
             Stopwatch sw = new Stopwatch();
             for (int i = 0; i < o.Bench; i++)
             {
                 sw.Restart();
-                Rasterizer.Rasterize(ring, px, o.Width, o.Height, view, pal);
+                Rasterizer.Rasterize(ring, px, o.Width, o.Height, view, pal, sc.Nodes);
                 sw.Stop();
                 ms[i] = sw.Elapsed.TotalMilliseconds;
             }
             Array.Sort(ms);
+
+            // The HUD and the legend are part of the frame, not a preview extra: the indicator
+            // writes them into this same int[] right after Rasterize, so if the harness skipped
+            // them the PNG would stop being what NinjaTrader shows — which is the whole contract.
+            double chromeMs = 0;
+            if (o.ShowChrome)
+            {
+                Chrome.HudInfo hud = new Chrome.HudInfo();
+                hud.Instrument = o.In != null ? Path.GetFileNameWithoutExtension(o.In) : "SYNTHETIC";
+                hud.DepthLevels = o.In != null ? 0 : o.Levels;   // a tape carries no configured depth
+                hud.Observed = ObservedLevels(ring);             // measured off the ring, never the knob
+                hud.ColumnMs = (int)(ColumnRing.BucketMs * Math.Max(1, Math.Ceiling(1.0 / view.PxPerBucket)));
+                hud.RowTicks = (int)Math.Max(1, Math.Ceiling(1.0 / view.PxPerTick));
+                hud.S0 = (int)Math.Round(o.S0);
+                hud.SCap = (int)Math.Round(o.Cap);
+                hud.WallsKnown = sc.Nodes != null;
+                Census(sc.Nodes, out hud.WallsLive, out hud.WallsRemembered, out hud.WallsFaint);
+                hud.FrameMs = ms[ms.Length / 2];
+                hud.Fps = 4.0;                                   // NT8 caps chart repaint at 250 ms
+
+                Chrome.DrawHud(px, o.Width, o.Height, hud, o.Scale);          // JIT warm-up: the
+                Chrome.DrawLegend(px, o.Width, o.Height, pal, o.Scale);       // first call is 3+ ms
+                sw.Restart();
+                Chrome.DrawHud(px, o.Width, o.Height, hud, o.Scale);
+                Chrome.DrawLegend(px, o.Width, o.Height, pal, o.Scale);
+                sw.Stop();
+                chromeMs = sw.Elapsed.TotalMilliseconds;
+            }
 
             Png.Write(o.Out, px, o.Width, o.Height);
 
             Console.WriteLine("source     {0}", sc.Desc);
             Console.WriteLine("columns    {0} fed, published {1}, overflows {2}, late drops {3}",
                 sc.Columns, ring.PublishedIndex, ring.Overflows, ring.LateDrops);
+            Console.WriteLine("ring       capacity {0} columns ({1:0.0} min, {2:0.0} MB)   visited {3}/frame",
+                capacity, capacity * ColumnRing.BucketMs / 60000.0,
+                // ColumnHeader is long + 3 int = 20 B, padded to 24 by the long's alignment.
+                (capacity * (24.0 + ring.CellsPerColumn * 8.0)) / (1024 * 1024), visited);
             Console.WriteLine("view       {0}x{1}  {2} ticks @ {3:0.00} px/tick  {4:0.0}s @ {5:0.00} px/250ms",
                 o.Width, o.Height, o.Ticks, o.Height / (float)o.Ticks, o.SpanSeconds, pxPerBucket);
             Console.WriteLine("ramp       s0 {0} cap {1}  bg #{2:X6}", o.S0, o.Cap, o.Bg & 0xFFFFFF);
+            Console.WriteLine("walls      {0}   (gates K_mult {1}, MinAbsSize {2})",
+                WallCensus(sc.Nodes), o.KMult, o.MinSize);
             Console.WriteLine("rasterize  p50 {0:0.00} ms   max {1:0.00} ms   ({2} frames, budget ~60 ms)",
                 ms[ms.Length / 2], ms[ms.Length - 1], o.Bench);
+            Console.WriteLine("chrome     {0}", o.ShowChrome
+                ? string.Format(CultureInfo.InvariantCulture, "HUD + legend at x{0}, {1:0.00} ms", o.Scale, chromeMs)
+                : "off (--no-chrome)");
             Console.WriteLine("wrote      {0}  ({1} bytes)", o.Out, new FileInfo(o.Out).Length);
             return 0;
+        }
+
+        // Live / remembered / below the confidence floor. On a --in run these are the real engine's
+        // numbers on real tape, so a line reading "0 live" is the answer to "are the NQ placeholder
+        // thresholds anywhere near right for ES" — not a rendering problem.
+        static string WallCensus(IReadOnlyList<RadarNode> nodes)
+        {
+            if (nodes == null || nodes.Count == 0) return "none";
+            int live, mem, faint;
+            Census(nodes, out live, out mem, out faint);
+            return string.Format(CultureInfo.InvariantCulture,
+                "{0} tracked -> {1} grooved, {2} remembered, {3} below the 0.25 confidence floor",
+                nodes.Count, live, mem, faint);
+        }
+
+        // OBS: the deepest ONE SIDE ever got in this ring, which is what the indicator's own
+        // _levelsSeen counts. Taking it from --levels instead would make the feed-truth badge a
+        // restatement of a knob — the one thing that line exists not to be.
+        static int ObservedLevels(ColumnRing ring)
+        {
+            int best = 0;
+            for (int ci = 0; ci < ring.Capacity; ci++)
+            {
+                ColumnHeader hd = ring.Header(ci);
+                if (hd.StartTicks == 0) continue;
+                int bid = 0, ask = 0;
+                for (int i = 0; i < hd.Count; i++)
+                {
+                    DepthCell c = ring.CellAt(ci, i);
+                    if (c.Bid > 0) bid++;
+                    if (c.Ask > 0) ask++;
+                }
+                if (bid > best) best = bid;
+                if (ask > best) best = ask;
+            }
+            return best;
+        }
+
+        // The same three numbers the HUD prints as `WALLS 3L 11R 27D`. One counter, two readouts:
+        // a census line and a HUD token that disagreed would be worse than either alone.
+        static void Census(IReadOnlyList<RadarNode> nodes, out int live, out int mem, out int faint)
+        {
+            live = mem = faint = 0;
+            if (nodes == null) return;
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                if (nodes[i].InWindow) { if (nodes[i].State == NodeState.Wall) live++; }
+                else if (nodes[i].Confidence >= 0.25) mem++;
+                else faint++;
+            }
         }
     }
 
@@ -92,13 +188,24 @@ namespace SizeMap.Harness
         public long NowTicks;     // market time at the right edge
         public int Columns;
         public string Desc;
+        public IReadOnlyList<RadarNode> Nodes;   // wall bands, null when the scene has none
     }
 
     internal sealed class Opt
     {
         public string In, Out = Path.Combine("out", "sizemap.png");
         public int Width = 1600, Height = 900, Ticks = 100, Levels = 10, Seed = 7, Bench = 20;
+        public int Minutes, FillColumns;   // 0 = the historical default: 7200 columns, synthetic sized by --span
+        public bool ShowChrome = true;     // the HUD and legend are part of the frame, not a preview extra
+        public int Scale = 1;              // 1 or 2; on a chart it comes from chartControl.M22ToDevice
         public double SpanSeconds = 100, S0 = 8, Cap = 320;
+        // The two wall gates, on the command line because they are the two RadarConfig values that
+        // have never been validated out of sample and the only ones a tape run is likely to want to
+        // move. MEASURED on ES 2026-08-13: over 4,000 engine ticks the size/baseline ratio tops out
+        // at 3.98, so the NQ default of 4.0 confirms exactly zero walls on that tape. "walls none"
+        // is a calibration result, not a broken layer, and this is how you see which.
+        public double KMult = 4.0;
+        public int MinSize = 40;
         public uint Bg = 0xFF1F1F1F;
         public TimeSpan? At;
 
@@ -112,6 +219,7 @@ namespace SizeMap.Harness
                 {
                     case "-h": case "--help": return null;
                     case "--synthetic": o.In = null; continue;
+                    case "--no-chrome": o.ShowChrome = false; continue;
                 }
                 if (i + 1 >= a.Length) throw new ArgumentException("missing value for " + k);
                 string v = a[++i];
@@ -125,6 +233,10 @@ namespace SizeMap.Harness
                     case "--levels": o.Levels = Int(v, k); break;
                     case "--seed": o.Seed = Int(v, k); break;
                     case "--bench": o.Bench = Math.Max(1, Int(v, k)); break;
+                    case "--kmult": o.KMult = Dbl(v, k); break;
+                    case "--minsize": o.MinSize = Int(v, k); break;
+                    case "--scale": o.Scale = Int(v, k) >= 2 ? 2 : 1; break;
+                    case "--minutes": o.Minutes = Math.Max(0, Int(v, k)); break;
                     case "--s0": o.S0 = Dbl(v, k); break;
                     case "--cap": o.Cap = Dbl(v, k); break;
                     case "--span": o.SpanSeconds = Span(v); break;
@@ -201,6 +313,20 @@ namespace SizeMap.Harness
             long last = 0, lastBucket = -1;
             int cols = 0, used = 0;
 
+            // The REAL wall engine on real tape, driven exactly as the indicator drives it: one
+            // Update per 250 ms of MARKET time. That is the only reason to reconstruct a BookMirror
+            // here at all — the ring does not need one. Without it the wall layer could only ever be
+            // judged against fixtures I invented, which proves the painting and nothing else.
+            RadarConfig cfg = new RadarConfig
+            {
+                TickSize = h.TickSize > 0 ? h.TickSize : 0.25,
+                K_mult = o.KMult,
+                MinAbsSize = o.MinSize
+            };
+            WallTracker tracker = new WallTracker(cfg);
+            BookMirror book = new BookMirror(cfg.TickSize, TimeSpan.FromSeconds(30));
+            long lastWallRun = 0;
+
             for (int i = 0; i < n; i++)
             {
                 RawRecord r = recs[i];
@@ -216,11 +342,19 @@ namespace SizeMap.Harness
                     ring.Reset(t);
                     bid = ask = ColumnRing.NoRow;
                     lastBucket = -1; cols = 0;
+                    book = new BookMirror(cfg.TickSize, TimeSpan.FromSeconds(30));
+                    tracker = new WallTracker(cfg);      // rebuild, never clear — same rule as the indicator
                 }
                 else if (r.Kind == RawKind.DepthBid || r.Kind == RawKind.DepthAsk)
                 {
                     Side s = r.Kind == RawKind.DepthBid ? Side.Bid : Side.Ask;
-                    ring.Accumulate(t, r.Row, s, r.Op == (byte)DepthOp.Remove ? 0 : r.Size);
+                    long size = r.Op == (byte)DepthOp.Remove ? 0 : r.Size;
+                    ring.Accumulate(t, r.Row, s, size);
+                    book.ApplyDepth(new DepthEvent
+                    {
+                        Side = s, Op = (DepthOp)r.Op, Position = r.Pos,
+                        Price = r.Row * cfg.TickSize, Volume = size, Time = new DateTime(t)
+                    });
                     if (r.Pos == 0)
                     {
                         if (s == Side.Bid) bid = r.Row; else ask = r.Row;
@@ -229,7 +363,19 @@ namespace SizeMap.Harness
                     lastRow = r.Row;
                     used++;
                 }
-                else continue;                       // trades and heartbeats: Phase 1 draws neither
+                else if (r.Kind == RawKind.TradeBuy || r.Kind == RawKind.TradeSell)
+                {
+                    // Fed for the classifier's benefit only; the raster draws no prints in v1.
+                    book.ApplyTrade(new TradeEvent { Price = r.Row * cfg.TickSize, Volume = r.Size, Time = new DateTime(t) });
+                    continue;
+                }
+                else continue;                       // heartbeats
+
+                if (t - lastWallRun >= ColumnRing.BucketTicks)
+                {
+                    lastWallRun = t;
+                    tracker.Update(book, new DateTime(t));
+                }
 
                 long b = ColumnRing.BucketOf(t);
                 if (b != lastBucket) { lastBucket = b; cols++; }
@@ -246,6 +392,7 @@ namespace SizeMap.Harness
             sc.AnchorRow = bid != ColumnRing.NoRow && ask != ColumnRing.NoRow ? (bid + ask) / 2 : lastRow;
             sc.NowTicks = last;
             sc.Columns = cols;
+            sc.Nodes = tracker.GetSnapshot(new DateTime(last));
             sc.Desc = string.Format(CultureInfo.InvariantCulture,
                 "{0}  {1} records ({2} depth), tick {3}, t0 {4:yyyy-MM-dd HH:mm:ss}{5}",
                 Path.GetFileName(path), n, used, h.TickSize, new DateTime(h.T0Ticks),
@@ -269,7 +416,9 @@ namespace SizeMap.Harness
             Rng rng = new Rng(o.Seed);
             const int BaseRow = 100000;                          // NQ 25000.00 at a 0.25 tick
             int half = Math.Max(4, o.Ticks / 2 - 6);
-            int cols = (int)Math.Ceiling(o.SpanSeconds * 1000.0 / ColumnRing.BucketMs) + 1;
+            int cols = o.FillColumns > 0
+                ? o.FillColumns
+                : (int)Math.Ceiling(o.SpanSeconds * 1000.0 / ColumnRing.BucketMs) + 1;
             long b0 = new DateTime(2026, 8, 14, 14, 32, 0).Ticks / ColumnRing.BucketTicks;
 
             Wall[] walls = MakeWalls(rng, cols, BaseRow, half);
@@ -332,9 +481,62 @@ namespace SizeMap.Harness
             sc.AnchorRow = BaseRow;
             sc.NowTicks = t;
             sc.Columns = cols;
+            sc.Nodes = MakeNodes(walls, cols, b0, BaseRow, half);
             sc.Desc = string.Format(CultureInfo.InvariantCulture,
                 "synthetic  seed {0}, {1} levels/side, {2} walls", o.Seed, o.Levels, walls.Length);
             return sc;
+        }
+
+        // The wall bands, as fixtures. The synthetic book has no BookMirror behind it, so there is no
+        // real WallTracker to ask — and that is fine, because what this scene is FOR is judging the
+        // form contrast: solid+groove vs hollow rules, side by side, in one PNG with no legend. The
+        // tape path (--in) runs the real tracker instead, which is where "does the engine find walls"
+        // gets answered.
+        static IReadOnlyList<RadarNode> MakeNodes(Wall[] walls, int cols, long b0, int baseRow, int half)
+        {
+            const double Tick = 0.25;
+            List<RadarNode> ns = new List<RadarNode>();
+
+            for (int i = 0; i < walls.Length; i++)
+            {
+                int size = WallSize(walls[i], cols - 1);
+                if (size <= 0) continue;
+                ns.Add(new RadarNode
+                {
+                    Price = walls[i].Row * Tick,
+                    Side = walls[i].Row > baseRow ? Side.Ask : Side.Bid,
+                    LastKnownSize = size,
+                    PeakSize = walls[i].Peak,
+                    State = NodeState.Wall,
+                    RawState = NodeState.Wall,
+                    Confidence = 0.9,
+                    InWindow = true,
+                    FirstSeenTicks = (b0 + walls[i].C0) * ColumnRing.BucketTicks
+                });
+            }
+
+            // Three remembered bands, one per rung of the dash ladder — solid / even dash / dotted —
+            // alternating side so both side-tick directions are in the frame, and the first one over
+            // the default sCap so the saturation mark is too.
+            double[] conf = { 1.0, 0.5, 0.3 };
+            int[] row = { baseRow + half - 2, baseRow - half + 2, baseRow + half - 9 };
+            int[] bornCol = { 0, cols / 3, cols / 2 };
+            long[] sizes = { 900, 240, 70 };
+            for (int i = 0; i < conf.Length; i++)
+                ns.Add(new RadarNode
+                {
+                    Price = row[i] * Tick,
+                    Side = (i % 2 == 0) ? Side.Ask : Side.Bid,
+                    LastKnownSize = sizes[i],
+                    PeakSize = sizes[i],
+                    State = NodeState.Remembered,
+                    RawState = NodeState.Wall,
+                    Confidence = conf[i],
+                    InWindow = false,
+                    FirstSeenTicks = (b0 + bornCol[i]) * ColumnRing.BucketTicks
+                });
+
+            return ns;
         }
 
         static bool InWindow(int row, int bid, int ask, int levels)

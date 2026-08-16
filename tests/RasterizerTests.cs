@@ -38,7 +38,7 @@ namespace SizeMap.Tests
         {
             var p = Pal();
             var px = new int[10 * 10];
-            Rasterizer.Rasterize(new ColumnRing(8, 8), px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f), p);
+            Rasterizer.Rasterize(new ColumnRing(8, 8), px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f, 0.25), p);
             for (int i = 0; i < px.Length; i++)
                 Assert.Equal(unchecked((int)Bg), px[i]);
         }
@@ -52,7 +52,7 @@ namespace SizeMap.Tests
 
             // NowX 10 with 4 px per bucket: the column at back=0 owns x [6,10).
             // AnchorY 5 at row 100 with 1 px per tick: row 100 owns y [4,5), row 101 y [3,4).
-            Rasterizer.Rasterize(ring, px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f), p);
+            Rasterizer.Rasterize(ring, px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f, 0.25), p);
 
             int heat = unchecked((int)p.ColourOf(50));
             int env = unchecked((int)Palette.Envelope);
@@ -74,7 +74,7 @@ namespace SizeMap.Tests
             var p = Pal();
             var ring = OneColumn(100, (int)Side.Bid, 40, 100, (int)Side.Ask, 300);
             var px = new int[10 * 10];
-            Rasterizer.Rasterize(ring, px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f), p);
+            Rasterizer.Rasterize(ring, px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f, 0.25), p);
             Assert.Equal(unchecked((int)p.ColourOf(300)), At(px, 10, 7, 4));
         }
 
@@ -86,7 +86,7 @@ namespace SizeMap.Tests
             var px = new int[10 * 10];
 
             // 0.25 px per tick: rows 100 and 101 both land on y = 4.
-            Rasterizer.Rasterize(ring, px, 10, 10, new RasterView(100, 5f, 0.25f, B0, 10f, 4f), p);
+            Rasterizer.Rasterize(ring, px, 10, 10, new RasterView(100, 5f, 0.25f, B0, 10f, 4f, 0.25), p);
 
             Assert.Equal(unchecked((int)p.ColourOf(500)), At(px, 10, 7, 4));
             Assert.NotEqual(unchecked((int)p.ColourOf(10)), unchecked((int)p.ColourOf(500)));
@@ -103,7 +103,7 @@ namespace SizeMap.Tests
 
             var px = new int[10 * 10];
             // 0.4 px per bucket: both columns land on x = 9.
-            Rasterizer.Rasterize(r, px, 10, 10, new RasterView(100, 5f, 1f, B0 + BT, 10f, 0.4f), p);
+            Rasterizer.Rasterize(r, px, 10, 10, new RasterView(100, 5f, 1f, B0 + BT, 10f, 0.4f, 0.25), p);
 
             Assert.Equal(unchecked((int)p.ColourOf(500)), At(px, 10, 9, 4));
         }
@@ -119,7 +119,7 @@ namespace SizeMap.Tests
             r.Accumulate(B0 + 10 * BT, 0, Side.Ask, 1);
 
             var px = new int[20 * 10];
-            Rasterizer.Rasterize(r, px, 20, 10, new RasterView(100, 5f, 1f, B0 + 9 * BT, 20f, 0.5f), p);
+            Rasterizer.Rasterize(r, px, 20, 10, new RasterView(100, 5f, 1f, B0 + 9 * BT, 20f, 0.5f, 0.25), p);
 
             bool sawTheWall = false;
             for (int x = 0; x < 20; x++) if (At(px, 20, x, 4) == unchecked((int)p.ColourOf(500))) sawTheWall = true;
@@ -139,7 +139,7 @@ namespace SizeMap.Tests
             var px = new int[w * h + guard];
             for (int i = w * h; i < px.Length; i++) px[i] = 0x5A5A5A5A;
 
-            Rasterizer.Rasterize(ring, px, w, h, new RasterView(100, 5f, 1f, B0, 10f, 4f), p);
+            Rasterizer.Rasterize(ring, px, w, h, new RasterView(100, 5f, 1f, B0, 10f, 4f, 0.25), p);
 
             for (int i = w * h; i < px.Length; i++)
                 Assert.Equal(0x5A5A5A5A, px[i]);
@@ -156,7 +156,7 @@ namespace SizeMap.Tests
 
             var px = new int[10 * 10];
             // 4 px per bucket over a 10 px panel: only the newest 3 columns can be on screen.
-            Rasterizer.Rasterize(r, px, 10, 10, new RasterView(100, 5f, 1f, B0 + 39 * BT, 10f, 4f), p);
+            Rasterizer.Rasterize(r, px, 10, 10, new RasterView(100, 5f, 1f, B0 + 39 * BT, 10f, 4f, 0.25), p);
 
             int heat = unchecked((int)p.ColourOf(300));
             for (int x = 0; x < 10; x++) Assert.Equal(heat, At(px, 10, x, 4));
@@ -174,7 +174,7 @@ namespace SizeMap.Tests
                 99, (int)Side.Bid, 60);
 
             var px = new int[12 * 12];
-            Rasterizer.Rasterize(ring, px, 12, 12, new RasterView(100, 8f, 1f, B0, 12f, 4f), p);
+            Rasterizer.Rasterize(ring, px, 12, 12, new RasterView(100, 8f, 1f, B0, 12f, 4f, 0.25), p);
 
             int env = unchecked((int)Palette.Envelope);
             int heat = unchecked((int)p.ColourOf(60));
@@ -192,7 +192,7 @@ namespace SizeMap.Tests
             r.Reset(B0);
 
             var px = new int[10 * 10];
-            Rasterizer.Rasterize(r, px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f), p);
+            Rasterizer.Rasterize(r, px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f, 0.25), p);
             for (int i = 0; i < px.Length; i++) Assert.Equal(unchecked((int)Bg), px[i]);
         }
 
@@ -201,7 +201,7 @@ namespace SizeMap.Tests
         {
             var p = Pal();
             var px = new int[10];
-            Rasterizer.Rasterize(OneColumn(100, (int)Side.Ask, 50), px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f), p);
+            Rasterizer.Rasterize(OneColumn(100, (int)Side.Ask, 50), px, 10, 10, new RasterView(100, 5f, 1f, B0, 10f, 4f, 0.25), p);
             for (int i = 0; i < px.Length; i++) Assert.Equal(0, px[i]);   // untouched, not half-painted
         }
     }
