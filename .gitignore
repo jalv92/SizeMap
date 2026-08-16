@@ -1,0 +1,8 @@
+bin/
+obj/
+build/
+.stage/
+out/
+*.smr
+*.smc
+spec.build.html

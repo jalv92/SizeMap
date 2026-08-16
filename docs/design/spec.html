@@ -1,0 +1,387 @@
+<title>SizeMap Visual Spec</title>
+<style>
+  :root{
+    /* The page palette IS the product palette. Every value below is measured,
+       and the ramp's monotonicity was verified against ground #232424. */
+    --ground:#101315;
+    --surface:#16191C;
+    --surface-2:#1B2024;
+    --line:#252C31;
+    --line-bright:#333D44;
+    --ink:#E6EAEE;
+    --ink-2:#97A1AC;
+    --ink-3:#6B757E;
+
+    --b1:#103772; --b2:#1F4F94; --b3:#446B9E; --b4:#6187AE;
+    --g1:#A79F73; --g2:#C9B97A; --g3:#EFD472; --g4:#FFF49D;
+    --rose:#F14BE9;
+    --envelope:#3A3F44;
+
+    --mono:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+
+    --ramp:linear-gradient(90deg,#232424 0%,#103772 12.55%,#1F4F94 25.1%,#446B9E 37.6%,
+           #6187AE 50.2%,#A79F73 62.7%,#C9B97A 75.3%,#EFD472 87.8%,#FFF49D 100%);
+  }
+
+  /* Deliberately single-theme. This palette was engineered against a dark chart
+     ground; rendering it on paper would misrepresent every contrast figure on
+     the page. Every color is painted explicitly so the page holds on any host. */
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 24px 96px;}
+  .measure{max-width:68ch;}
+
+  /* ---- masthead ---- */
+  header{padding:64px 0 40px; border-bottom:1px solid var(--line);}
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--ink-3); margin:0 0 20px;
+  }
+  h1{
+    font-family:var(--mono); font-weight:600; font-size:clamp(32px,5.5vw,54px);
+    letter-spacing:-.02em; line-height:1.05; margin:0 0 6px; text-wrap:balance;
+    color:var(--ink);
+  }
+  h1 .dim{color:var(--ink-3);}
+  .thesis{
+    font-size:clamp(17px,2.2vw,21px); line-height:1.5; color:var(--ink-2);
+    margin:20px 0 0; max-width:60ch; text-wrap:balance;
+  }
+  .thesis b{color:var(--g4); font-weight:600;}
+  .rampbar{height:6px; background:var(--ramp); margin:32px 0 0; border-radius:1px;}
+
+  /* ---- sections ---- */
+  section{padding:56px 0 0;}
+  h2{
+    font-family:var(--mono); font-size:13px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--ink-2); font-weight:600;
+    margin:0 0 8px; display:flex; align-items:baseline; gap:14px;
+  }
+  h2 .num{
+    color:var(--b4); font-size:11px; letter-spacing:.1em;
+    border:1px solid var(--line-bright); border-radius:2px;
+    padding:2px 6px; flex:none;
+  }
+  h3{
+    font-family:var(--mono); font-size:14px; font-weight:600; color:var(--ink);
+    margin:36px 0 10px; letter-spacing:-.01em;
+  }
+  .lede{font-size:18px; color:var(--ink); margin:0 0 28px; max-width:64ch; text-wrap:balance;}
+  p{margin:0 0 16px;}
+  .measure p{color:var(--ink-2);}
+  .measure strong{color:var(--ink); font-weight:600;}
+  code{
+    font-family:var(--mono); font-size:.88em; background:var(--surface-2);
+    border:1px solid var(--line); border-radius:3px; padding:1px 5px; color:var(--g3);
+  }
+
+  /* ---- figures ---- */
+  figure{margin:28px 0 0;}
+  figure img{
+    display:block; width:100%; height:auto; border:1px solid var(--line);
+    border-radius:3px; background:#232424;
+  }
+  figcaption{
+    font-family:var(--mono); font-size:12px; line-height:1.65; color:var(--ink-2);
+    margin-top:12px; max-width:78ch;
+  }
+  figcaption b{color:var(--ink); font-weight:600;}
+  .figlabel{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-3); margin-bottom:10px;
+  }
+
+  /* ---- tables ---- */
+  .scroll{overflow-x:auto; margin:20px 0 0; border:1px solid var(--line); border-radius:3px;}
+  table{
+    border-collapse:collapse; width:100%; min-width:560px;
+    font-family:var(--mono); font-size:13px; font-variant-numeric:tabular-nums;
+  }
+  th{
+    text-align:left; font-weight:600; color:var(--ink-3); font-size:11px;
+    letter-spacing:.1em; text-transform:uppercase; padding:10px 14px;
+    background:var(--surface); border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  td{padding:9px 14px; border-bottom:1px solid var(--line); color:var(--ink-2); vertical-align:top;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr:nth-child(even) td{background:rgba(255,255,255,.014);}
+  td.k{color:var(--ink); font-weight:600; white-space:nowrap;}
+  td.n{text-align:right; white-space:nowrap;}
+  .sw{
+    display:inline-block; width:34px; height:14px; border-radius:2px;
+    border:1px solid rgba(255,255,255,.14); vertical-align:-2px; margin-right:8px;
+  }
+
+  /* ---- callout ---- */
+  .callout{
+    background:var(--surface); border:1px solid var(--line);
+    border-left:3px solid var(--rose); border-radius:3px;
+    padding:20px 24px; margin:28px 0 0;
+  }
+  .callout p{margin:0; color:var(--ink-2);}
+  .callout p + p{margin-top:12px;}
+  .callout .big{
+    font-family:var(--mono); font-size:26px; color:var(--ink);
+    font-weight:600; letter-spacing:-.02em; display:block; margin-bottom:6px;
+  }
+
+  /* ---- ledger diagram ---- */
+  .ledger{display:flex; height:34px; border:1px solid #0E1013; border-radius:2px; overflow:hidden; margin:6px 0 0; max-width:520px;}
+  .ledger div{display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-size:11px; color:#0E1013; font-weight:600;}
+  .lkey{display:flex; gap:20px; flex-wrap:wrap; font-family:var(--mono); font-size:12px; color:var(--ink-2); margin-top:10px;}
+  .lkey span{display:flex; align-items:center; gap:7px;}
+  .dot{width:11px; height:11px; border-radius:2px; flex:none;}
+
+  /* ---- list ---- */
+  ul{margin:0; padding:0; list-style:none;}
+  .qa li{
+    padding:16px 0; border-bottom:1px solid var(--line);
+    display:grid; grid-template-columns:auto 1fr; gap:16px; align-items:start;
+  }
+  .qa li:last-child{border-bottom:none;}
+  .qa .q{
+    font-family:var(--mono); font-size:11px; color:var(--b4);
+    border:1px solid var(--line-bright); border-radius:2px; padding:2px 7px; flex:none;
+  }
+  .qa .body{color:var(--ink-2); font-size:15px;}
+  .qa .body b{color:var(--ink); font-weight:600;}
+
+  .cut li{
+    display:grid; grid-template-columns:minmax(150px,220px) 1fr; gap:20px;
+    padding:12px 0; border-bottom:1px solid var(--line); font-size:14px;
+  }
+  .cut li:last-child{border-bottom:none;}
+  .cut .what{font-family:var(--mono); color:var(--ink); font-size:13px;}
+  .cut .why{color:var(--ink-2);}
+
+  footer{
+    margin-top:72px; padding-top:24px; border-top:1px solid var(--line);
+    font-family:var(--mono); font-size:12px; color:var(--ink-3);
+    display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  }
+  @media (max-width:640px){
+    .cut li{grid-template-columns:1fr; gap:4px;}
+    header{padding:40px 0 28px;}
+  }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">NinjaTrader 8 · Order-book heatmap · Spec v1</p>
+  <h1>SizeMap <span class="dim">/ visual spec</span></h1>
+  <p class="thesis">
+    Every liquidity heatmap shows you that 400 lots are sitting at 7440.
+    SizeMap shows you <b>whether they got bought or cancelled</b> — live, on the chart,
+    with the arithmetic.
+  </p>
+  <div class="rampbar"></div>
+</header>
+
+<section>
+  <h2><span class="num">01</span> The two frames</h2>
+  <p class="lede">Rendered from the real pixel logic — the same log-normalised LUT and the same
+  grammar the C&nbsp;indicator will use. Synthetic book, real design.</p>
+
+  <figure>
+    <p class="figlabel">A · NQ, 10 levels, six minutes in</p>
+    <img src="__IMG_A__" alt="SizeMap at 10 levels of depth: a narrow blue-and-gold liquidity ribbon tracking price, two bright gold wall bands with dark grooves, four hollow dashed remembered walls at different dash densities each ending in an outcome glyph, and two consumption ledgers in the right margin.">
+    <figcaption>
+      The live book is a <b>narrow ribbon</b> — ten levels is 2.50 points a side, so it can only ever
+      be a band that sweeps with price. Everything above and below it is <b>remembered</b>: hollow,
+      never filled, drawn at the brightness the wall had when it was last seen. Dash density is
+      confidence — solid, dashed, dotted, gone. Each remembered band ends in the glyph that says
+      how it died. The two gold bands with the dark groove above and below are confirmed live walls;
+      their ledgers sit in the empty margin at the right.
+    </figcaption>
+  </figure>
+
+  <figure>
+    <p class="figlabel">B · ES, 40 levels, three hours in</p>
+    <img src="__IMG_B__" alt="SizeMap at 40 levels of depth: a dense blue liquidity field covering most of the chart height with three bright gold wall bands, saturation marks, remembered bands below, and three stacked consumption ledgers in the right margin.">
+    <figcaption>
+      Nothing about the grammar changed — same ramp, same threshold, same marks. Depth changes the
+      <b>fill ratio</b>, not the design: the field goes from ~14% of the panel to ~50%. The three
+      walls still read as the loudest objects on screen because the ramp spends its entire budget on
+      magnitude, and the field stays at low chroma so it never vibrates. Two walls carry the
+      <b>saturation mark</b> — the double white tick meaning "off the top of the scale".
+    </figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="num">02</span> Why the built-in is unusable</h2>
+  <div class="measure">
+    <p>This was measured, not asserted. NinjaTrader's own Order Flow Market Depth Map was sampled
+    pixel by pixel: its heatmap is <code>matplotlib.gray</code> to within dE 0.0014, and its entire
+    magnitude range — from "no liquidity" to the biggest wall on screen — is eight grey values.</p>
+  </div>
+
+  <div class="callout">
+    <p><span class="big">0.8 JND per step</span>
+    Every magnitude step in NT8's heatmap is below the human threshold of perceptible difference.
+    Its loudest possible reading sits at <strong>1.25 : 1</strong> contrast against its own chart
+    background.</p>
+    <p>SizeMap's ramp: nine stops, <strong>+0.084 OKLab lightness per step (≈ 8.5 JND)</strong>,
+    top stop at <strong>13.84 : 1</strong>. Monotone under protanopia and deuteranopia both — which
+    the candles themselves are not.</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">03</span> BEACON — the ramp</h2>
+  <div class="measure">
+    <p>Nine stops, interpolated in sRGB into a 256-entry lookup table. Strictly monotone in OKLab
+    lightness. <strong>Zero</strong> of the 256 entries land in the red arc [349°,60°) or the green
+    arc [110°,177°) — the hues already spent on candles — so a liquidity band can never be mistaken
+    for a candle body. That single constraint is what disqualified the green-to-red variant outright.</p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>LUT</th><th>Colour</th><th>Hex</th><th>BGRA int</th><th class="n">OKLab L</th><th class="n">Chroma</th><th class="n">Contrast</th></tr></thead>
+      <tbody>
+        <tr><td class="k">0</td><td><span class="sw" style="background:#232424"></span>ground</td><td>chart bg</td><td>composited</td><td class="n">0.259</td><td class="n">0.001</td><td class="n">1.00</td></tr>
+        <tr><td class="k">32</td><td><span class="sw" style="background:#103772"></span>abyss</td><td>#103772</td><td>0xFF103772</td><td class="n">0.347</td><td class="n">0.111</td><td class="n">1.34</td></tr>
+        <tr><td class="k">64</td><td><span class="sw" style="background:#1F4F94"></span>deep</td><td>#1F4F94</td><td>0xFF1F4F94</td><td class="n">0.434</td><td class="n">0.125</td><td class="n">1.93</td></tr>
+        <tr><td class="k">96</td><td><span class="sw" style="background:#446B9E"></span>shelf</td><td>#446B9E</td><td>0xFF446B9E</td><td class="n">0.522</td><td class="n">0.093</td><td class="n">2.85</td></tr>
+        <tr><td class="k">128</td><td><span class="sw" style="background:#6187AE"></span>haze</td><td>#6187AE</td><td>0xFF6187AE</td><td class="n">0.611</td><td class="n">0.073</td><td class="n">4.14</td></tr>
+        <tr><td class="k">160</td><td><span class="sw" style="background:#A79F73"></span>ember</td><td>#A79F73</td><td>0xFFA79F73</td><td class="n">0.698</td><td class="n">0.061</td><td class="n">5.82</td></tr>
+        <tr><td class="k">192</td><td><span class="sw" style="background:#C9B97A"></span>brass</td><td>#C9B97A</td><td>0xFFC9B97A</td><td class="n">0.785</td><td class="n">0.084</td><td class="n">7.93</td></tr>
+        <tr><td class="k">224</td><td><span class="sw" style="background:#EFD472"></span>flare</td><td>#EFD472</td><td>0xFFEFD472</td><td class="n">0.873</td><td class="n">0.122</td><td class="n">10.62</td></tr>
+        <tr><td class="k">255</td><td><span class="sw" style="background:#FFF49D"></span>beacon</td><td>#FFF49D</td><td>0xFFFFF49D</td><td class="n">0.957</td><td class="n">0.108</td><td class="n">13.84</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The four colours that are not the ramp</h3>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Role</th><th>Hex</th><th>Means</th></tr></thead>
+      <tbody>
+        <tr><td class="k"><span class="sw" style="background:#F14BE9"></span>traded</td><td>#F14BE9</td><td>Someone paid for it. Used in the ledger, and in the ● and ▲ glyphs. Sits 68° of hue from the nearest ramp stop.</td></tr>
+        <tr><td class="k"><span class="sw" style="background:#97A1AC"></span>not traded</td><td>#97A1AC</td><td>The seller walked. Same lightness as rose (0.687 vs 0.701) — the two differ <em>only</em> in chroma, which is the cleanest categorical read available at 1&nbsp;px.</td></tr>
+        <tr><td class="k"><span class="sw" style="background:#0E1013"></span>ink</td><td>#0E1013</td><td>The groove that turns a bright band into an object.</td></tr>
+        <tr><td class="k"><span class="sw" style="background:#3A3F44"></span>envelope</td><td>#3A3F44</td><td>The depth-vision polyline: how far your feed could see, column by column, through history.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="measure">
+    <h3>Compression: colour saturates, geometry carries the overflow</h3>
+    <p>Index is <code>log(1 + size/s0) / log(1 + sCap/s0)</code>, with <code>s0</code> and
+    <code>sCap</code> anchored to the median and 8× the 85th percentile of the <em>whole book</em>,
+    recomputed every five seconds. One doubling of size ≈ +42 LUT indices ≈ 11 JND.</p>
+    <p>When a freak 2000-lot wall appears, max-normalising would darken the entire chart at exactly
+    the moment something interesting happened. Here the wall saturates at 255, the rest of the chart
+    does not move a single index, and the excess is carried by the saturation mark and by the printed
+    number. The history ring stores <strong>lot counts, never LUT indices</strong>, so the legend is
+    true for every column on screen, not just the newest one.</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">04</span> The grammar</h2>
+  <div class="measure">
+    <p>The honesty rule made structural: <strong>observed liquidity is solid, remembered liquidity is
+    hollow.</strong> Not the same band at lower alpha — a different form, readable from a screenshot
+    with no legend. A 50% stipple was tested and rejected: it optically averages ΔL −0.145, which is
+    almost two ramp stops, so it lies about the very magnitude it claims to preserve.</p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>State</th><th>Fill</th><th>Edge</th><th>Glyph</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Live level</td><td>solid, LUT[idx(size)]</td><td>none</td><td>—</td></tr>
+        <tr><td class="k">Confirmed wall</td><td>solid, LUT[idx(size)]</td><td>1&nbsp;px ink groove above + below, plus a left cap at birth</td><td>—</td></tr>
+        <tr><td class="k">Remembered</td><td><strong>none</strong></td><td>two 1&nbsp;px rules at the undimmed last-seen colour; dash duty = confidence; 3&nbsp;px side tick, up = was ask</td><td>—</td></tr>
+        <tr><td class="k">Consumed</td><td>—</td><td>as remembered</td><td>● filled disc, rose</td></tr>
+        <tr><td class="k">Absorbed</td><td>—</td><td>as remembered</td><td>▲ triangle, rose</td></tr>
+        <tr><td class="k">Pulled</td><td>—</td><td>as remembered</td><td>✕ saltire, grey</td></tr>
+        <tr><td class="k">Unclassified</td><td>—</td><td>as remembered</td><td>◇ hollow diamond, grey</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="measure">
+    <p style="margin-top:24px">Confidence rides the dash, never alpha and never hue: 8-on at ≥0.875,
+    then 6/2, 4/4, 2/6, and below 0.25 the band is <em>not drawn at all</em>. Two orthogonal channels —
+    the colour says how big it was, the dash says how sure we are it is still there — and neither
+    corrupts the other.</p>
+    <p>The <strong>◇ is not decoration</strong>. When the classifier cannot separate absorbed from
+    pulled it refuses to answer, and the chart says so. A product that admits what it does not know
+    outranks one that always has a label.</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">05</span> The ledger — the whole product</h2>
+  <div class="measure">
+    <p>In the blank margin right of the last bar, 44&nbsp;px wide, vertically centred on the wall's
+    band. Three segments. A 620-lot ask wall now showing 160, of the 460 that disappeared 400 were
+    actually traded:</p>
+  </div>
+
+  <div class="ledger">
+    <div style="flex:0 0 26%;background:#EFD472">REMAINING</div>
+    <div style="flex:0 0 64%;background:#F14BE9">BOUGHT</div>
+    <div style="flex:0 0 10%;background:#97A1AC">CANCEL</div>
+  </div>
+  <div class="lkey">
+    <span><i class="dot" style="background:#EFD472"></i>still resting — the wall's own heat colour</span>
+    <span><i class="dot" style="background:#F14BE9"></i>traded away — real demand</span>
+    <span><i class="dot" style="background:#97A1AC"></i>cancelled — the seller walked</span>
+  </div>
+
+  <div class="measure">
+    <p style="margin-top:22px">The same wall, same 620→160 collapse, but mostly cancelled, is a bar
+    that is almost entirely grey. On every competing product those two situations look
+    <em>identical</em>: a red band getting dimmer. That difference is the entire reason this project
+    exists.</p>
+    <p><strong>And it discloses its own bias.</strong> Trade attribution reads from a pruned ring, so
+    a wall older than the retention window has had the trades that ate it forgotten — "traded" becomes
+    a lower bound. When that happens the ledger's right border pixel is omitted, leaving the track
+    visibly open. An open edge means "there was more, we lost it."</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">06</span> Deliberately not drawn</h2>
+  <ul class="cut">
+    <li><span class="what">Blur, glow, feathering</span><span class="why">The data is one tick by 250&nbsp;ms. Anything smoother is a claim about resolution the feed cannot support.</span></li>
+    <li><span class="what">Animation of any kind</span><span class="why">NT8 caps chart repaint at 250&nbsp;ms. A pulse is a stutter.</span></li>
+    <li><span class="what">Alpha as a data channel</span><span class="why">Alpha carries 0xFF and nothing else. Magnitude rides the LUT, confidence rides the dash.</span></li>
+    <li><span class="what">Bid/ask hue</span><span class="why">Position encodes it inside the window; a 3-pixel side tick encodes it outside. Two hues would cost half the magnitude budget.</span></li>
+    <li><span class="what">Bookmap's second hot ramp</span><span class="why">Measured: a −0.13 lightness drop at the seam. A big orange wall renders darker than a medium white one.</span></li>
+    <li><span class="what">Callout boxes, side panels, summary panels</span><span class="why">~28% of the plot area and a collision solver, to restate what the heat and the ledger already say.</span></li>
+    <li><span class="what">An in-chart DOM ladder</span><span class="why">NT8 ships a SuperDOM. Duplicating it costs 20% of the chart width for data one keystroke away.</span></li>
+    <li><span class="what">Historical backfill</span><span class="why">Depth never fires on historical bars. A vertical REC rule discloses where the record starts; faking it would make every other honesty rule worthless.</span></li>
+    <li><span class="what">Any licence server</span><span class="why">Runs offline, no token, no phone-home. The benchmark product stops working when its backend does.</span></li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="num">07</span> Only you can answer these</h2>
+  <ul class="qa">
+    <li><span class="q">Q1</span><span class="body"><b>Stop 5 is a khaki</b> and it is on screen constantly. Warm, or dirty? It cannot rotate further from green — if it bothers you the fix is chroma, not hue. Judge it after a full session, not in ten minutes.</span></li>
+    <li><span class="q">Q2</span><span class="body"><b>Hollow bands at 10 levels.</b> With fifteen-plus on screen, does it read as a liquidity map or as scaffolding? This is the single biggest open risk in the design and no amount of specification settles it.</span></li>
+    <li><span class="q">Q3</span><span class="body"><b>The ink groove.</b> At your monitor's gamma, is one pixel above and below a bright band enough to say "this is a confirmed object"? If not it goes to two, before anything gets a colour.</span></li>
+    <li><span class="q">Q4</span><span class="body"><b>Everything is behind the candles</b> — including the HUD and the legend. That is the price of <code>SetZOrder(-1)</code> and it is all-or-nothing. If a candle lands on your legend often enough to annoy you, the fix is a second thin indicator at default z-order.</span></li>
+    <li><span class="q">Q5</span><span class="body"><b>Rose against grey at 5&nbsp;px tall.</b> They are the same lightness by design and differ only in chroma. Confirm that survives on your screen — if it does not, the ledger gets taller; the colours do not change.</span></li>
+  </ul>
+</section>
+
+<footer>
+  <span>SizeMap · visual spec v1 · ramp BEACON · direction INSTRUMENT</span>
+  <span>One draw call per frame</span>
+</footer>
+
+</div>
