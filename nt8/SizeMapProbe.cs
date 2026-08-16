@@ -94,6 +94,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 			rtSeen = RenderTarget;
 		}
 
+		// Bitmap(RenderTarget, Size2, BitmapProperties), found by signature so that no
+		// SharpDX.DXGI type is ever named or resolved at compile time. Cached: the
+		// lookup runs once per session, and bitmap creation itself only happens on a
+		// resize or a device reset.
+		private static System.Reflection.ConstructorInfo bitmapCtor;
+		private static System.Reflection.ConstructorInfo BitmapCtor()
+		{
+			if (bitmapCtor != null) return bitmapCtor;
+			foreach (var ci in typeof(SharpDX.Direct2D1.Bitmap).GetConstructors())
+			{
+				var p = ci.GetParameters();
+				if (p.Length == 3
+					&& p[0].ParameterType.Name == "RenderTarget"
+					&& p[1].ParameterType.Name == "Size2")
+				{
+					bitmapCtor = ci;
+					return bitmapCtor;
+				}
+			}
+			// Loud, not silent: if SharpDX ever changes this shape we want to know at the
+			// first frame, not through a blank chart.
+			throw new InvalidOperationException(
+				"SizeMap: Bitmap(RenderTarget, Size2, BitmapProperties) not found in SharpDX "
+				+ typeof(SharpDX.Direct2D1.Bitmap).Assembly.GetName().Version);
+		}
+
 		private void ReleaseDeviceResources()
 		{
 			if (bmp != null)
@@ -141,13 +167,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 					bw = pw; bh = ph;
 					px = new int[bw * bh];
 
-					// THE ONE LINE THIS WHOLE PHASE EXISTS FOR.
 					// Taking the format from the target means no SharpDX.DXGI type is ever
-					// named in this file — and NinjaTrader.Custom.csproj references only
-					// SharpDX and SharpDX.Direct2D1, so naming one would not compile in the
-					// NinjaScript Editor no matter what nt8c says.
+					// NAMED here — NinjaTrader.Custom.csproj references only SharpDX and
+					// SharpDX.Direct2D1, so naming one is CS0246 in the NinjaScript Editor.
 					var props = new SharpDX.Direct2D1.BitmapProperties(RenderTarget.PixelFormat);
-					bmp = new SharpDX.Direct2D1.Bitmap(RenderTarget, new SharpDX.Size2(bw, bh), props);
+
+					// But not naming one is not enough. `new Bitmap(...)` makes the compiler
+					// load every Bitmap constructor to do overload resolution, and one of
+					// them takes a SharpDX.DXGI.Surface — so the plain `new` is CS0012 even
+					// though this file never mentions DXGI. Reflection skips overload
+					// resolution entirely and needs no reference.
+					//
+					// ponytail: binds by signature at runtime. Ceiling — a SharpDX upgrade
+					// that changed this constructor would fail at load instead of at compile.
+					// Upgrade path: add bin/SharpDX.DXGI.dll in Editor > References and this
+					// becomes a plain `new`.
+					bmp = (SharpDX.Direct2D1.Bitmap)BitmapCtor().Invoke(
+						new object[] { RenderTarget, new SharpDX.Size2(bw, bh), props });
 				}
 
 				Paint();
@@ -298,7 +334,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Print("DotsPerInch            : " + RenderTarget.DotsPerInch.Width + " x " + RenderTarget.DotsPerInch.Height);
 				Print("RenderTarget.Size      : " + RenderTarget.Size.Width + " x " + RenderTarget.Size.Height);
 				Print("RenderTarget.PixelSize : " + RenderTarget.PixelSize.Width + " x " + RenderTarget.PixelSize.Height);
-				Print("PixelFormat            : " + RenderTarget.PixelFormat.Format + " / alpha " + RenderTarget.PixelFormat.AlphaMode);
+				// NOT RenderTarget.PixelFormat.Format — that field's type is SharpDX.DXGI.Format
+				// and merely reading it is CS0012 without the reference. ToString() on the
+				// struct gives the same information and names nothing.
+				Print("PixelFormat            : " + RenderTarget.PixelFormat.ToString());
 				Print("ChartPanel X,Y,W,H     : " + ChartPanel.X + "," + ChartPanel.Y + "," + pw + "," + ph);
 				Print("ZOrder requested       : " + (DrawBehindBars ? "-1 (behind bars)" : "default (in front)"));
 				// 1 DIP == 1 device pixel is what makes ChartPanel coords usable directly in
