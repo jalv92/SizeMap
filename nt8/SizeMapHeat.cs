@@ -463,7 +463,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// of a wrong pxPerTick rather than a wrong anchor. Rather than infer that from
 			// screenshots, ask NT8 where a price goes and compare. If _projErr is not ~0 the
 			// projection is lying and the whole raster is misplaced.
-			double probeP = cs.MinValue + (cs.MaxValue - cs.MinValue) * 0.85;
+			// Snap the probe to a tick. Without it the check compares the y of a ROUNDED tick
+			// against the y of an unrounded price, so its own noise floor is pxTick/2 — which is
+			// exactly what the first twenty readings showed (max |err| 3.9 px, every one of them
+			// under half a tick). A metric whose noise is bigger than the defect it hunts is not
+			// a metric.
+			double probeP = Math.Round((cs.MinValue + (cs.MaxValue - cs.MinValue) * 0.85) / _tick) * _tick;
 			int    ntY    = cs.GetYByValue(probeP) - panelY;
 			float  ourY   = anchorY - ((float)Math.Round(probeP / _tick) - anchorRow) * pxPerTick;
 			_projErr      = ourY - ntY;
