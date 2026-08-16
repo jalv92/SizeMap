@@ -13,15 +13,27 @@ namespace SizeMap.Engine
         private readonly TimeSpan _tradeRetention;
         // Safety bound only, NOT a feed assumption: the ladder is however deep the feed sends.
         // NT Brokerage/Continuum tops out near 10, Rithmic delivers 40+. Spec §47: never
-        // hardcode ladder size. 128 exists purely so a misbehaving stream cannot grow this
-        // list without limit. ponytail: raise it if a feed ever exceeds that.
+        // hardcode ladder size. This exists purely so a misbehaving stream cannot grow the list
+        // without limit.
+        //
+        // 2026-08-16, 6 PM ET: the old 128 stopped being a safety bound and became a measurement.
+        // The HUD read `obs 128L` on ES, which is this cap saturating, not the feed reporting -- so
+        // the one readout whose entire job is feed honesty was reporting my own ceiling back at me.
+        // Three other fields agreed the feed had genuinely deepened that session: `walls 13L 0R 0F`
+        // (nothing outside the window left to remember, against 6L 2R 4F that morning) and the
+        // colour scale collapsing from s0 23 / cap 752 to s0 7 / cap 224 as the sampled size
+        // distribution filled up with thin far levels.
+        //
+        // ponytail: 512 is the next bound, not a measured need. If `obs` ever prints 512, distrust
+        // it exactly the same way and raise this again -- a saturated cap always looks like a
+        // real number.
         private readonly int _maxLevels;
         // Bids kept descending by price, asks ascending — same order NT delivers by Position.
         private readonly List<DepthLevel> _bids = new List<DepthLevel>();
         private readonly List<DepthLevel> _asks = new List<DepthLevel>();
         private readonly List<Trade> _trades = new List<Trade>();
 
-        public BookMirror(double tickSize, TimeSpan tradeRetention, int maxLevels = 128)
+        public BookMirror(double tickSize, TimeSpan tradeRetention, int maxLevels = 512)
         {
             _tick = tickSize;
             _tradeRetention = tradeRetention;

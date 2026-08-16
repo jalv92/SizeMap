@@ -61,6 +61,12 @@ namespace SizeMap.Engine
                 st.PresentLastUpdate = true;
 
                 // Persistence: relative + absolute must hold continuously.
+                // ponytail: this is O(n^2 log n) -- MedianSizeExcluding rebuilds and re-sorts the
+                // whole side per level. Left alone deliberately when the ladder cap went 128 -> 512
+                // on 2026-08-16: 512 levels is ~1.8 M comparisons and 2 MB of Gen0 per pass, four
+                // times a second, which is well under a millisecond of one core. Upgrade path if a
+                // feed ever goes deeper still: sort the side ONCE per pass and answer each
+                // "median excluding this level" by index arithmetic on that array.
                 long b = Math.Max(book.MedianSizeExcluding(side, levels[i].Price), bTime);
                 bool qualifies = levels[i].Volume >= _cfg.K_mult * b && levels[i].Volume >= _cfg.MinAbsSize;
                 if (qualifies) { if (st.QualifyingSince == null) st.QualifyingSince = now; }

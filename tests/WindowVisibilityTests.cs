@@ -124,4 +124,27 @@ public class WindowVisibilityTests
         Assert.True(b.IsWithinWindow(Side.Ask, 7810.00));   // 39 ticks up, invisible at 10 levels
         Assert.False(b.IsWithinWindow(Side.Ask, 7810.25));
     }
+
+    // The regression that actually bit, 2026-08-16 6 PM ET. The HUD's `obs` field is the one number
+    // whose whole job is to say how deep the feed is, and it read 128 -- which was the default cap
+    // saturating, not the feed reporting. A default that silently truncates gets read as a
+    // measurement, so it has to sit far enough above any real feed that saturation means "something
+    // is wrong", not "this is Tuesday".
+    //
+    // This pins the DEFAULT, not the parameter: BookMirrorTests already covers eviction by passing
+    // maxLevels explicitly. Nothing in nt8/, verdict/ or harness/ ever passes it.
+    [Fact]
+    public void The_default_cap_does_not_truncate_a_feed_far_deeper_than_any_real_one()
+    {
+        var b = new BookMirror(Tick, TimeSpan.FromSeconds(30));
+        const int deep = 300;                               // ~6x Rithmic's 40+, still under the cap
+
+        for (int i = 0; i < deep; i++)
+            b.ApplyDepth(new DepthEvent { Side = Side.Ask, Op = DepthOp.Add, Position = i,
+                Price = 7800.25 + i * Tick, Volume = 70, Time = T });
+
+        Assert.Equal(deep, b.Levels(Side.Ask).Count);
+        Assert.True(b.IsWithinWindow(Side.Ask, 7800.25 + (deep - 1) * Tick),
+            "the far end was clipped, so `obs` would report the cap instead of the feed");
+    }
 }
