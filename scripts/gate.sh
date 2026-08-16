@@ -21,7 +21,7 @@ LIVE="/mnt/c/Users/javlo/Documents/NinjaTrader 8/bin/Custom"
 STAGE="$(mktemp -d)/Custom"
 trap 'rm -rf "$(dirname "$STAGE")"' EXIT
 
-mkdir -p "$STAGE/Indicators/SizeMap" "$STAGE/ChartStyles"
+mkdir -p "$STAGE/Indicators/SizeMap" "$STAGE/ChartStyles" "$STAGE/Strategies"
 
 if [ "${1:-}" = "--full" ]; then
     # Compile the LIVE Custom/ tree, in place. Not a staged copy: nt8c still aliases the real
@@ -43,6 +43,8 @@ cp "$REPO"/engine/*.cs "$STAGE/Indicators/SizeMap/"
 for f in "$REPO"/nt8/*.cs; do
     if grep -q '^namespace NinjaTrader\.NinjaScript\.ChartStyles' "$f"; then
         cp "$f" "$STAGE/ChartStyles/"
+    elif grep -q '^namespace NinjaTrader\.NinjaScript\.Strategies' "$f"; then
+        cp "$f" "$STAGE/Strategies/"
     else
         cp "$f" "$STAGE/Indicators/SizeMap/"
     fi
@@ -75,7 +77,8 @@ errs = [e for e in errs if not (e.get("code") == "CS0103" and "'indicator'" in e
 # files" and the gate exited 0. A gate with a blind spot is worse than no gate, because it
 # is trusted.
 mine = [e for e in errs if "/Indicators/SizeMap/" in e.get("file","")
-        or re.search(r"/ChartStyles/SizeMap[^/]*\.cs$", e.get("file",""))]
+        or re.search(r"/ChartStyles/SizeMap[^/]*\.cs$", e.get("file",""))
+        or re.search(r"/Strategies/SizeMap[^/]*\.cs$", e.get("file",""))]
 dup = [e for e in errs if e.get("code") == "CS0101"]
 print("files compiled: %s | errors total: %d | in SizeMap files: %d | CS0101: %d"
       % (n, len(errs), len(mine), len(dup)))

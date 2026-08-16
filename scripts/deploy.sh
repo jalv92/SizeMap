@@ -12,9 +12,10 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NT8="/mnt/c/Users/javlo/Documents/NinjaTrader 8/bin/Custom"
 IND="$NT8/Indicators/SizeMap"
 STY="$NT8/ChartStyles"
+STR="$NT8/Strategies"
 
 [ -d "$NT8" ] || { echo "NT8 Custom folder not found: $NT8" >&2; exit 1; }
-mkdir -p "$IND" "$STY"
+mkdir -p "$IND" "$STY" "$STR"
 
 fail=0
 
@@ -36,6 +37,8 @@ for f in "$REPO"/nt8/*.cs; do
   [ -f "$f" ] || continue
   if grep -q '^namespace NinjaTrader\.NinjaScript\.ChartStyles' "$f"; then
     deploy "$f" "$STY"
+  elif grep -q '^namespace NinjaTrader\.NinjaScript\.Strategies' "$f"; then
+    deploy "$f" "$STR"
   else
     deploy "$f" "$IND"
   fi
@@ -67,5 +70,5 @@ else
   echo "  ok    no TradingRadar namespace under Indicators/SizeMap"
 fi
 
-echo "deployed: $(ls -1 "$IND" | wc -l) file(s) in Indicators/SizeMap, $(ls -1 "$STY"/SizeMap*.cs 2>/dev/null | wc -l) chart style(s)"
+echo "deployed: $(ls -1 "$IND" | wc -l) file(s) in Indicators/SizeMap, $(ls -1 "$STY"/SizeMap*.cs 2>/dev/null | wc -l) chart style(s), $(ls -1 "$STR"/SizeMap*.cs 2>/dev/null | wc -l) strategy/ies"
 exit $fail
