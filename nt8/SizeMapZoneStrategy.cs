@@ -65,6 +65,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             public NodeState State;
             public NodeState RawState;
             public long FirstSeenTicks;
+            public double EfficiencyRatio;
         }
 
         // A row is written once a leg's outcome is fully known (filled-then-exited, or
@@ -111,7 +112,11 @@ namespace NinjaTrader.NinjaScript.Strategies
         private const string CsvHeader =
             "timestamp,signal,side,zone_price,zone_peak_size,resting_size_at_touch,departure_ticks," +
             "sma_state,limit_price,filled,fill_price,mae_ticks,mfe_ticks,targets_hit,exit_reason,pnl_ticks," +
-            "in_window,age_seconds,confidence,state,raw_state,first_seen_ticks,exit_timestamp,holding_time_sec";
+            "in_window,age_seconds,confidence,state,raw_state,first_seen_ticks,exit_timestamp,holding_time_sec," +
+            // Logged on EVERY row, including when the gate is switched off (MinEfficiencyRatio = 0),
+            // because the rows the gate would have rejected are the ones that say whether the
+            // threshold is set right. 0.30 is a guess until this column has a few sessions in it.
+            "efficiency_ratio";
 
         private const int FixedTargetLegs = 3;               // TP1/TP2/TP3 -- everything past this is a runner
 
@@ -175,6 +180,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         private SMA _sma20, _sma50, _sma200;
         private DecisionLog _log;
 
+        // Range filter. _closeBuf is reused every bar so the gate allocates nothing; _efficiency is
+        // the last value computed, captured into the arm snapshot. _efficiencyState is -1 until the
+        // first evaluation so the very first verdict prints -- otherwise a session that starts in
+        // chop looks identical to a session where the strategy never loaded.
+        private double[] _closeBuf;
+        private double _efficiency;
+        private int _efficiencyState = -1;
+
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
@@ -220,6 +233,8 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                 DepartureTicks = 8;
                 ArmingDistanceTicks = 4;
+                RangeFilterPeriod = 40;
+                MinEfficiencyRatio = 0.30;
                 RequirePriceBeyondSma20 = false;
                 StopLossTicks = 8;
                 Tp1RMultiple = 3.0;
@@ -255,6 +270,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 _sma200 = SMA(200);
 
                 _entryOrders = new Order[ContractCount];
+                _closeBuf = new double[Math.Max(2, RangeFilterPeriod)];
 
                 // ponytail: filename date is DateTime.Now (wall clock), not the bar/market time
                 // SizeMapRecorder.cs uses. That file needs market-time rollover because it spans a
@@ -263,7 +279,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 // for. Upgrade path -- switch to the first bar's Time[0] if that ever matters.
                 string dir = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "SizeMap");
                 Directory.CreateDirectory(dir);
-                string path = Path.Combine(dir, "zone-decisions-" + Sanitize(Instrument.MasterInstrument.Name) + "-" + DateTime.Now.ToString("yyyyMMdd") + ".csv");
+                string stem = Path.Combine(dir, "zone-decisions-" + Sanitize(Instrument.MasterInstrument.Name) + "-" + DateTime.Now.ToString("yyyyMMdd"));
+                string path = PathForCurrentSchema(stem);
                 if (!File.Exists(path)) File.WriteAllText(path, CsvHeader + Environment.NewLine);
                 _log = new DecisionLog(path);
             }
@@ -446,8 +463,15 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             if (Position.MarketPosition != MarketPosition.Flat) return;   // max-position guard
 
+            // Range filter BEFORE the trend check, and separate from it, because they fail for
+            // opposite reasons: ComputeTrend says "the averages disagree", this says "the averages
+            // agree but the market is not going anywhere". Conflating them would hide the second
+            // case behind the first in the Output window.
+            bool trending = MarketIsTrending();
+
             TrendState trend = ComputeTrend();
             if (trend == TrendState.None) return;
+            if (!trending) return;
 
             RadarNode? candidate = FindArmableZone(nodes, trend);
             if (candidate != null) ArmZone(candidate.Value, trend);
@@ -464,6 +488,40 @@ namespace NinjaTrader.NinjaScript.Strategies
             if (bullStack && (!RequirePriceBeyondSma20 || Close[0] > s20)) return TrendState.Long;
             if (bearStack && (!RequirePriceBeyondSma20 || Close[0] < s20)) return TrendState.Short;
             return TrendState.None;
+        }
+
+        // The range filter. A stacked SMA is a statement about three averages, not about whether
+        // the market is travelling -- and it orders itself cleanly at the extremes of a range,
+        // which is the worst place a trend-continuation entry can be. On 2026-08-16 that armed a
+        // short 5 ticks off the low of an hour-long 22-point band. TrendQuality.EfficiencyRatio
+        // asks the question the stack cannot: net displacement over the path walked to get there.
+        //
+        // ALWAYS computes, even with the gate switched off, because efficiency_ratio goes into
+        // every CSV row and the rows this gate would have rejected are exactly the ones that say
+        // whether 0.30 is the right cut. Turning the filter off must not blind the measurement
+        // that replaces the guess.
+        private bool MarketIsTrending()
+        {
+            int count = Math.Min(_closeBuf.Length, CurrentBar + 1);
+            for (int i = 0; i < count; i++) _closeBuf[i] = Close[i];
+            _efficiency = TrendQuality.EfficiencyRatio(_closeBuf, count);
+
+            if (MinEfficiencyRatio <= 0) return true;
+
+            bool trending = _efficiency >= MinEfficiencyRatio;
+
+            // Printed on transitions only. Per-bar would be 120 lines an hour of noise in the
+            // window Javier watches for fills; never printing would make a filtered-out session
+            // indistinguishable from a session where nothing set up.
+            int state = trending ? 1 : 0;
+            if (state != _efficiencyState)
+            {
+                _efficiencyState = state;
+                Print(string.Format("[SizeMapZone] {0} -- efficiency {1:0.000} vs {2:0.000} over {3} bars.",
+                    trending ? "trending, arming enabled" : "RANGE -- arming suspended",
+                    _efficiency, MinEfficiencyRatio, count));
+            }
+            return trending;
         }
 
         // (a) "was promoted as a wall" is satisfied by mere presence in this snapshot:
@@ -570,7 +628,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 Confidence = zone.Confidence,
                 State = zone.State,
                 RawState = zone.RawState,
-                FirstSeenTicks = zone.FirstSeenTicks
+                FirstSeenTicks = zone.FirstSeenTicks,
+                EfficiencyRatio = _efficiency
             };
 
             double[] rMultiples = { Tp1RMultiple, Tp2RMultiple, Tp3RMultiple };
@@ -1017,7 +1076,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 _armSnapshot.RawState.ToString(),
                 _armSnapshot.FirstSeenTicks.ToString(),
                 exitTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-                holdingSec >= 0 ? holdingSec.ToString("F1") : ""
+                holdingSec >= 0 ? holdingSec.ToString("F1") : "",
+                _armSnapshot.EfficiencyRatio.ToString("F3")
             }));
         }
 
@@ -1046,8 +1106,37 @@ namespace NinjaTrader.NinjaScript.Strategies
                 _armSnapshot.RawState.ToString(),
                 _armSnapshot.FirstSeenTicks.ToString(),
                 resolvedTime.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-                ""
+                "",
+                _armSnapshot.EfficiencyRatio.ToString("F3")
             }));
+        }
+
+        // The header gains columns as this file learns what the forward test needs to see, and the
+        // filename is wall-clock dated -- so a re-run on a day whose file was written by an earlier
+        // column set used to append wider rows under a narrower header, silently. Not hypothetical:
+        // zone-decisions-ES-20260816.csv on this machine holds 34 rows of 16 fields and 88 of 24
+        // under a 16-column header, which nothing can align afterwards. Roll to a sibling instead;
+        // both files stay readable, which matters because the rows carry MARKET time and one file
+        // legitimately spans several Replay days.
+        private static string PathForCurrentSchema(string stem)
+        {
+            string path = stem + ".csv";
+            for (int n = 2; n < 100; n++)
+            {
+                if (!File.Exists(path)) return path;
+                // Unreadable == unverifiable, and unverifiable must never be appended to. File.Exists
+                // saying yes does not make the open safe (a sharing violation, an antivirus or
+                // cloud-sync agent holding the handle, an ACL hiccup all still throw), and
+                // DecisionLog opens a FRESH handle per row minutes later -- so a failure that clears
+                // in between turns "could not read the header once" into 25-field rows appended under
+                // a 16-field header. Roll on failure, exactly as a mismatched header does.
+                bool usable;
+                try { using (StreamReader r = new StreamReader(path)) usable = r.ReadLine() == CsvHeader; }
+                catch { usable = false; }
+                if (usable) return path;
+                path = stem + "-" + n + ".csv";
+            }
+            return path;
         }
 
         private static string Sanitize(string s)
@@ -1082,6 +1171,16 @@ namespace NinjaTrader.NinjaScript.Strategies
         [NinjaScriptProperty]
         [Display(Name = "Also require price beyond SMA20", Description = "Trend definition: long only when SMA20 > SMA50 > SMA200, short only when SMA20 < SMA50 < SMA200 (stacked). ON adds: close must also be above SMA20 for longs / below SMA20 for shorts.", Order = 1, GroupName = "02. Trend")]
         public bool RequirePriceBeyondSma20 { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(2, 2000)]
+        [Display(Name = "Range filter lookback (bars)", Description = "How many closed bars the efficiency ratio measures over. Default 40 = 20 minutes on a 30-second chart. Longer sees the whole range and is slower to declare a trend; shorter reacts to each leg inside it.", Order = 2, GroupName = "02. Trend")]
+        public int RangeFilterPeriod { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(0.0, 1.0)]
+        [Display(Name = "Min efficiency ratio (0 = filter off)", Description = "Range filter. Net price displacement over the lookback divided by the total path walked to get there: 1 is a straight line, 0 is a round trip. No zone arms below this. 0 disables the gate but still logs the ratio on every row, which is how the right value gets measured. PROVISIONAL default 0.30, and both numbers below are measured over the 40-bar default rather than over a whole session: the most trend-like 40-bar window inside the hour of ES chop that motivated this filter scores 0.12, while a three-up-one-back leg scores 0.49. The margin is 2.6x, not the 10x the whole hour suggests.", Order = 3, GroupName = "02. Trend")]
+        public double MinEfficiencyRatio { get; set; }
 
         [NinjaScriptProperty]
         [Range(1, 500)]
