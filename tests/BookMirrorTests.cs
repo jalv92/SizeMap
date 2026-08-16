@@ -216,4 +216,78 @@ public class BookMirrorTests
         Assert.Equal(2, b.RecentAlternations(100));  // full history: buy,sell,buy,buy,buy -> 2 alternations
         Assert.Equal(0, b.RecentAlternations(3));    // last 3 trades: buy,buy,buy -> 0 alternations
     }
+
+    // ---- Audit: is this a deep feed, or a book that lost sync with one? ----
+    //
+    // 2026-08-16: `obs` read 128 (the cap), then 512 (the new cap) twenty minutes later. A
+    // saturated cap is indistinguishable from a real measurement from the outside, and the
+    // heatmap could not settle it either -- levels under the colour scale's floor render
+    // transparent, so a deep-but-thin book and a half-empty one look the same. These three
+    // counters settle it without a judgement call.
+
+    static BookMirror TenDeepBids()
+    {
+        var b = new BookMirror(0.25, TimeSpan.FromSeconds(30));
+        for (int i = 0; i < 10; i++)
+            b.ApplyDepth(Dep(Side.Bid, DepthOp.Add, i, 7800.00 - i * 0.25, 70, 0));
+        return b;
+    }
+
+    [Fact]
+    public void Audit_of_a_healthy_ladder_reports_no_duplicates_and_no_disorder()
+    {
+        var s = TenDeepBids().Audit(Side.Bid);
+
+        Assert.Equal(10, s.Count);
+        Assert.Equal(0, s.Duplicates);
+        Assert.Equal(0, s.OutOfOrder);
+        // Contiguous at one level per tick: 10 levels reach 9 ticks. This is the arithmetic that
+        // makes Count > SpanTicks + 1 a proof of duplication rather than a heuristic.
+        Assert.Equal(9.0, s.SpanTicks, 6);
+    }
+
+    [Fact]
+    public void Audit_catches_a_price_stored_twice()
+    {
+        var b = TenDeepBids();
+        // The shape a desynced book takes: an Add for a price the ladder already holds. Nothing
+        // rejects it -- ApplyDepth inserts by POSITION and never consults the price.
+        b.ApplyDepth(Dep(Side.Bid, DepthOp.Add, 5, 7799.00, 70, 1));
+
+        var s = b.Audit(Side.Bid);
+        Assert.Equal(11, s.Count);
+        Assert.Equal(1, s.Duplicates);
+        // 11 entries inside 9 ticks: more levels than there are prices to hold them.
+        Assert.True(s.Count > s.SpanTicks + 1);
+    }
+
+    [Fact]
+    public void Audit_catches_an_entry_inserted_at_the_wrong_position()
+    {
+        var b = TenDeepBids();
+        // A clamped or mis-positioned insert: a far price landing at the touch. Prices stay
+        // unique, so only the ordering test catches this one.
+        b.ApplyDepth(Dep(Side.Bid, DepthOp.Add, 0, 7790.00, 70, 1));
+
+        var s = b.Audit(Side.Bid);
+        Assert.Equal(0, s.Duplicates);
+        Assert.True(s.OutOfOrder > 0, "a bid below the far end was accepted as the touch");
+    }
+
+    [Fact]
+    public void Audit_of_a_genuinely_deep_but_sparse_ladder_stays_clean()
+    {
+        // What a real off-hours book looks like: dense at the touch, scattered far out. Deep and
+        // gappy is NOT a defect, and the audit must not call it one.
+        var b = new BookMirror(0.25, TimeSpan.FromSeconds(30));
+        double px = 7800.00;
+        for (int i = 0; i < 40; i++) { b.ApplyDepth(Dep(Side.Bid, DepthOp.Add, i, px, 70, 0)); px -= 0.25; }
+        for (int i = 40; i < 60; i++) { b.ApplyDepth(Dep(Side.Bid, DepthOp.Add, i, px, 5, 0)); px -= 2.00; }
+
+        var s = b.Audit(Side.Bid);
+        Assert.Equal(60, s.Count);
+        Assert.Equal(0, s.Duplicates);
+        Assert.Equal(0, s.OutOfOrder);
+        Assert.True(s.Count < s.SpanTicks + 1, "sparse means fewer entries than ticks spanned");
+    }
 }

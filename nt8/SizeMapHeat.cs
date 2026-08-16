@@ -56,6 +56,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private long _nowTicks;                 // market time of the newest event
 		private int  _s0 = 8, _sCap = 320;      // the live ramp anchors, in lots
 		private int  _levelsSeen;               // max levels actually observed this session
+		private string _ladderAudit;            // 1 Hz structural audit, published for the Output line
 		private int  _epochs;                   // replay rewinds / feed discontinuities handled
 
 		// The wall snapshot, published exactly like the ring's index: the writer swaps a WHOLE
@@ -311,6 +312,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 				for (int i = 0; i < a.Count; i++) _depthBase.Add(a[i].Volume);
 				_depthBase.EndBatch();
 				PublishScale(b.Count > a.Count ? b.Count : a.Count);
+
+				// Published from HERE, on the depth thread inside _engineLock, because the render
+				// thread must never read _book -- same reason _levelsSeen is published rather than
+				// read. 1 Hz, one HashSet of at most MaxLevels: free. A string because it is a
+				// diagnostic, and a reference assignment is atomic.
+				BookMirror.LadderStats sb = _book.Audit(Side.Bid), sa = _book.Audit(Side.Ask);
+				Volatile.Write(ref _ladderAudit, string.Format(
+					"bid {0}lv span {1:0.0}t dup {2} ooo {3}  |  ask {4}lv span {5:0.0}t dup {6} ooo {7}",
+					sb.Count, sb.SpanTicks, sb.Duplicates, sb.OutOfOrder,
+					sa.Count, sa.SpanTicks, sa.Duplicates, sa.OutOfOrder));
 			}
 		}
 
@@ -846,6 +857,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 					: string.Format("{0:0.0}MB drop {1} pend {2}{3}{4}",
 						_rec.BytesWritten / 1048576.0, _rec.Dropped, _rec.Pending,
 						_rec.Capped ? " CAPPED" : "", _rec.Failed ? " FAILED" : "")));
+
+			string audit = Volatile.Read(ref _ladderAudit);
+			if (audit != null) Print("   ladder " + audit);
 		}
 
 		private static bool IsPlayback()

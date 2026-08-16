@@ -82,6 +82,50 @@ namespace SizeMap.Engine
                 : price >= best - half && price <= far + half;
         }
 
+        /// Structural audit of one side, for telling a genuinely deep feed apart from a book that
+        /// has desynced from it.
+        ///
+        /// The ladder is maintained BY POSITION (see ApplyDepth): an Add whose position lands past
+        /// the end is clamped to the end rather than rejected, so a single missed or reordered event
+        /// permanently offsets our indices from the feed's. After that every Remove deletes the
+        /// wrong entry and the list grows monotonically until it hits the cap -- which then looks
+        /// exactly like "the feed is this deep". `obs` saturating at 128, and again at 512 twenty
+        /// minutes later, is what a saturated cap looks like from the outside either way.
+        ///
+        /// These three numbers separate the cases, and none of them needs a judgement call:
+        ///   Duplicates > 0  or  OutOfOrder > 0   -> desynced. A real MBP ladder has neither.
+        ///   Count > SpanTicks + 1                -> desynced. More entries than there are prices
+        ///                                           to hold them, so some price is stored twice.
+        ///   all clean, Count large, Span large   -> the feed really is that deep.
+        public struct LadderStats
+        {
+            public int Count;           // levels held on this side
+            public double SpanTicks;    // touch to far end, in ticks
+            public int Duplicates;      // entries at a price already present
+            public int OutOfOrder;      // entries breaking the side's monotonic price order
+        }
+
+        public LadderStats Audit(Side side)
+        {
+            var list = SideList(side);
+            LadderStats s = new LadderStats();
+            s.Count = list.Count;
+            if (list.Count == 0) return s;
+            s.SpanTicks = Math.Abs(list[0].Price - list[list.Count - 1].Price) / _tick;
+
+            var seen = new HashSet<long>();
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (!seen.Add((long)Math.Round(list[i].Price / _tick))) s.Duplicates++;
+                if (i == 0) continue;
+                bool ordered = side == Side.Bid
+                    ? list[i].Price < list[i - 1].Price
+                    : list[i].Price > list[i - 1].Price;
+                if (!ordered) s.OutOfOrder++;
+            }
+            return s;
+        }
+
         public void ApplyDepth(DepthEvent e)
         {
             if (e.IsReset) { _bids.Clear(); _asks.Clear(); return; }
